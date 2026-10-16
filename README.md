@@ -25,11 +25,11 @@ Open the GitHub Pages URL in Safari, then **Share → Add to Home Screen**. It l
 No build step, it's plain static files.
 
 ```sh
-npm start            # python3 -m http.server 8000
+npm start            # python3 -m http.server 8888
 npm test             # track math tests (node --test)
 ```
 
-To try it on the iPad from your laptop, open `http://<laptop-ip>:8000` on the same Wi-Fi.
+To try it on the iPad from your laptop, open `http://<laptop-ip>:8888` on the same Wi-Fi.
 Add `?fast=4` to the URL to speed up the ride while testing.
 
 ## How it works
