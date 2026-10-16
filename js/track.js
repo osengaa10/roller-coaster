@@ -7,12 +7,15 @@ export const WORLD_SCALE = 40; // meters per normalized drawing unit
 export const STATION = { x0: 0.04, x1: 0.26, y: 0.06 };
 export const MIN_DRAWN_LENGTH = 0.35; // how much he must draw before "go" lights up
 export const MIN_Y = 0.025;
-export const STEP = 0.5; // meters between final track samples
+export const STEP = 0.5; // meters between final track samples (more on giant coasters)
+const MAX_SAMPLES = 16000; // giant space coasters get coarser sampling to stay fast
 
 export const V_MIN = 5.5; // chain-lift speed: the train never stalls or rolls back
-export const V_MAX = 30;
-// The lift chain runs faster the higher it goes, so a climb into space doesn't take forever.
-export const liftSpeed = (height) => Math.min(24, V_MIN + Math.max(0, height) * 0.1);
+export const V_MAX = 45; // about 100 mph, like the fastest real coasters
+// The lift chain speeds up gently on tall hills so a giant one doesn't take forever, and very
+// tall drops may go a bit faster. Kept modest so the ride stays smooth.
+export const liftSpeed = (height) => Math.min(80, V_MIN + Math.max(0, height) * 0.12);
+const maxSpeed = (height) => Math.min(100, Math.max(V_MAX, liftSpeed(height) * 1.25));
 const G = 9.81;
 const FRICTION = 0.015;
 const BRAKE_LENGTH = 0.7; // normalized
@@ -154,7 +157,11 @@ export function buildTrack(strokes) {
     return { x: (p.x - STATION.x0) * WORLD_SCALE, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE, c: p.c ?? 0 };
   });
   const keys3 = ['x', 'y', 'z'];
-  const samples = smooth(resample(smooth(pts3, 4, keys3), STEP, keys3), 3, keys3);
+  const rough = smooth(pts3, 4, keys3);
+  let roughLength = 0;
+  for (let i = 1; i < rough.length; i++) roughLength += dist(rough[i], rough[i - 1], keys3);
+  const step = Math.max(STEP, roughLength / MAX_SAMPLES);
+  const samples = smooth(resample(rough, step, keys3), 3, keys3);
 
   const n = samples.length;
   const pos = new Float32Array(n * 3);
@@ -183,11 +190,11 @@ export function buildTrack(strokes) {
     if (normal[i * 3 + 1] < -0.2) {
       let j = i;
       while (j < n && normal[j * 3 + 1] < -0.2) j++;
-      if ((j - i) * STEP > LONG_INVERSION) flip.fill(1, i, j);
+      if ((j - i) * step > LONG_INVERSION) flip.fill(1, i, j);
       i = j;
     } else i++;
   }
-  const roll = boxBlur(flip, Math.round(7 / STEP));
+  const roll = boxBlur(flip, Math.max(1, Math.round(7 / step)));
   const up = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const t = [tan[i * 3], tan[i * 3 + 1], tan[i * 3 + 2]];
@@ -200,40 +207,40 @@ export function buildTrack(strokes) {
   }
 
   // 4. Speed: real-ish energy on drops, chain lift floor on climbs, brakes at the end.
-  const length = (n - 1) * STEP;
+  const length = (n - 1) * step;
   const speed = new Float32Array(n);
   const lift = new Uint8Array(n);
   let v2 = V_MIN * V_MIN;
   for (let i = 0; i < n; i++) {
-    if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * FRICTION * G * STEP;
+    if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * FRICTION * G * step;
     let v = Math.sqrt(Math.max(0, v2));
     const floor = liftSpeed(pos[i * 3 + 1]);
     if (v < floor) {
       v = floor;
       lift[i] = tan[i * 3 + 1] > 0.05 ? 1 : 0;
     }
-    v = Math.min(v, V_MAX);
+    v = Math.min(v, maxSpeed(pos[i * 3 + 1]));
     v2 = v * v;
     speed[i] = v;
   }
   for (let i = 0; i < n; i++) {
-    const toEnd = length - i * STEP;
+    const toEnd = length - i * step;
     speed[i] = Math.max(0.6, Math.min(speed[i], Math.sqrt(2 * BRAKE_DECEL * toEnd)));
   }
 
   // 5. Places to shout "wheee": the top of any big drop.
   const whee = [];
-  const ahead = Math.round(20 / STEP);
+  const ahead = Math.max(1, Math.round(20 / step));
   for (let i = 0; i + ahead < n; i++) {
     const drop = pos[i * 3 + 1] - pos[(i + ahead) * 3 + 1];
-    if (drop > 9 && (whee.length === 0 || (i - whee[whee.length - 1]) * STEP > 40)) whee.push(i);
+    if (drop > 9 && (whee.length === 0 || (i - whee[whee.length - 1]) * step > 40)) whee.push(i);
   }
 
   // 6. Paint: one color per sample, rainbow measured along the track.
   const rgb = new Float32Array(n * 3);
-  samples.forEach((p, i) => rgb.set(colorAt(p.c ?? 0, (i * STEP) / WORLD_SCALE), i * 3));
+  samples.forEach((p, i) => rgb.set(colorAt(p.c ?? 0, (i * step) / WORLD_SCALE), i * 3));
 
-  return { count: n, step: STEP, length, pos, tan, up, speed, lift, whee, rgb };
+  return { count: n, step, length, pos, tan, up, speed, lift, whee, rgb };
 }
 
 // Where to stand support pillars: one every few meters, from just under the track down to
@@ -243,7 +250,8 @@ const POLE_EVERY = 7; // meters
 const POLE_ATTACH = 3; // meters of track either side that the pillar is allowed to touch
 const CLEARANCE = 1.6; // horizontal meters a pillar must stay away from the track and car
 const A_FRAME_FROM = 10; // meters: taller supports become two-legged A-frames
-const UPRIGHT = 0.8; // track tilted more than this (up.y) gets no supports
+const UPRIGHT = 0.35; // track steeper than ~70 degrees (or upside down) gets no supports
+const SUPPORT_MAX = 300; // meters: above this the track flies on its own
 const LEG_CLEARANCE = 1.6;
 
 // The two legs of an A-frame support, as [top, bottom] points.
@@ -258,19 +266,22 @@ export function supportSpots(track) {
   const { count: n, pos, up, step } = track;
   const spots = [];
   const near = Math.round(POLE_ATTACH / step);
-  for (let i = 0; i < n; i += Math.round(POLE_EVERY / step)) {
+  for (let i = 0; i < n; i += Math.max(1, Math.round(POLE_EVERY / step))) {
     // Only under upright track: in loops and other inversions "under the spine" points sideways
     // or up, and a column there would hold nothing. Loops hold themselves up.
-    if (up[i * 3 + 1] < UPRIGHT) continue;
+    if (up[i * 3 + 1] < UPRIGHT || pos[i * 3 + 1] > SUPPORT_MAX) continue;
     const base = {
       x: pos[i * 3] - up[i * 3] * 0.6,
       y: pos[i * 3 + 1] - up[i * 3 + 1] * 0.6,
       z: pos[i * 3 + 2] - up[i * 3 + 2] * 0.6,
     };
     if (base.y < 1) continue;
+    // On a steep slope the track itself runs close by below, so let the column touch more of it.
+    const slope = Math.hypot(track.tan[i * 3], track.tan[i * 3 + 2]);
+    const nearHere = Math.max(near, Math.ceil((CLEARANCE + 0.6) / Math.max(slope, 0.3) / step));
     let blocked = false;
     for (let j = 0; j < n && !blocked; j++) {
-      if (Math.abs(i - j) <= near) continue;
+      if (Math.abs(i - j) <= nearHere) continue;
       const below = pos[j * 3 + 1] - 0.8 < base.y; // bottom of that track's spine
       const close = Math.hypot(pos[j * 3] - base.x, pos[j * 3 + 2] - base.z) < CLEARANCE;
       blocked = below && close;
@@ -284,7 +295,7 @@ export function supportSpots(track) {
     base.spread = 0;
     if (base.y > A_FRAME_FROM) {
       base.spread = 0.8 + Math.min(base.y, 40) * 0.12; // legs stop spreading on giant towers
-      if (legsHitTrack(track, i, near, supportLegs(base))) base.spread = 0;
+      if (legsHitTrack(track, i, nearHere, supportLegs(base))) base.spread = 0;
     }
     spots.push(base);
   }
@@ -313,10 +324,12 @@ function rideSpan(track, startMeters = 18, endMeters = 30) {
 
 // Stars to fly through: one every STAR_EVERY meters along the ride.
 const STAR_EVERY = 25;
+const MAX_STARS = 40;
 export function starSpots(track) {
   const [a, b] = rideSpan(track);
   const out = [];
-  for (let i = a; i <= b; i += Math.round(STAR_EVERY / track.step)) out.push(i);
+  const every = Math.max(STAR_EVERY, (b - a) * track.step / MAX_STARS); // giant coasters: at most MAX_STARS
+  for (let i = a; i <= b; i += Math.max(1, Math.round(every / track.step))) out.push(i);
   return out;
 }
 

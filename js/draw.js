@@ -4,18 +4,22 @@ import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
 const MAX_HISTORY = 60;
-const MIN_ZOOM = 0.1; // how far the view can zoom out (1 = the sky is one track-height tall)
-const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 10 = 400 m, well into space)
+const MIN_ZOOM = 0.004; // how far the view can zoom out (1 = the sky is one track-height tall)
+const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 250 = 10 km, up in space)
+const SUPPORT_TOP = 7.5; // normalized (300 m): no supports drawn above this, same as the ride
+const EARTH_R = 1200; // normalized; a pretend-small Earth so its curve shows when zoomed way out
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
-const EDGE_ZOOM = 0.55; // per second: holding a line against the right/top edge zooms out this fast
+const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the edge
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
+// The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
 const SKY_STOPS = [
   [0, [201, 236, 255]],
   [1, [79, 179, 255]],
-  [3, [42, 91, 215]],
-  [4.5, [20, 26, 74]],
-  [6, [5, 6, 26]],
+  [8, [48, 120, 230]],
+  [40, [30, 62, 165]],
+  [110, [14, 20, 62]],
+  [170, [5, 6, 26]],
 ];
 function skyAt(alt) {
   let i = 0;
@@ -30,12 +34,13 @@ function skyAt(alt) {
 const STARS = (() => {
   let seed = 9;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  return Array.from({ length: 500 }, () => ({ x: rand() * 40, y: 3.5 + rand() * 7, r: 0.6 + rand() * 1.4 }));
+  return Array.from({ length: 900 }, () => ({ x: -60 + rand() * 760, y: 30 + Math.pow(rand(), 0.7) * 230, r: 0.6 + rand() * 1.5 }));
 })();
+const STARS_FROM = 30; // units: stars start to show above here
 const PLANETS = [
-  { x: 1.1, y: 5.2, r: 0.2, color: '#e9e9ee', craters: true },
-  { x: 2.7, y: 7.4, r: 0.3, color: '#e8c27a', ring: '#d9b77a' },
-  { x: 4.4, y: 9.2, r: 0.16, color: '#d9623b' },
+  { x: 30, y: 75, r: 4, color: '#e9e9ee', craters: true },
+  { x: 95, y: 145, r: 7, color: '#e8c27a', ring: '#d9b77a' },
+  { x: 175, y: 215, r: 3.5, color: '#d9623b' },
 ];
 
 export class DrawPad {
@@ -53,6 +58,7 @@ export class DrawPad {
     this.waitForLift = false; // after a pinch, ignore the leftover finger until all are lifted
     this.zoom = 1;
     this.panX = 0; // track x at the left edge of the screen
+    this.edgeHold = 0; // seconds the finger has been held against an edge
     this.dirty = true;
     this.active = true;
 
@@ -195,8 +201,13 @@ export class DrawPad {
     if (this.pointerId === null || !this.lastScreen || this.zoom <= MIN_ZOOM) return;
     const band = Math.max(28, Math.min(this.w, this.h) * 0.07);
     const { x, y } = this.lastScreen;
-    if (x < this.w - band && y > band) return;
-    this.setView(this.zoom * Math.exp(-EDGE_ZOOM * dt), this.panX);
+    if (x < this.w - band && y > band) {
+      this.edgeHold = 0;
+      return;
+    }
+    this.edgeHold += dt;
+    const rate = EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45);
+    this.setView(this.zoom * Math.exp(-rate * dt), this.panX);
     const stroke = this.strokes[this.strokes.length - 1].p;
     const p = this.toTrack(x, y);
     const prev = stroke[stroke.length - 1];
@@ -270,8 +281,8 @@ export class DrawPad {
     sky.addColorStop(1, skyAt(topAlt));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, groundY);
-    const space = Math.max(0, Math.min(1, (topAlt - 3) / 3)); // 0 = all blue, 1 = deep space on screen
-    if (topAlt > 3.5) this.drawSpace();
+    const space = Math.max(0, Math.min(1, (topAlt - 8) / 60)); // 0 = all blue, 1 = deep space on screen
+    if (topAlt > STARS_FROM) this.drawSpace();
 
     // Sun and clouds are scenery: sized to the screen, not the zoom.
     const z = Math.max(0.45, Math.min(1, Math.min(w, h) / 834));
@@ -298,11 +309,33 @@ export class DrawPad {
       cloud(ctx, cx * w, cy * h, s * z);
     }
 
-    // Ground
+    // Ground. Zoomed way out, it curves away like the Earth seen from up high.
+    const pts = pathFromStrokes(this.strokes);
+    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
+    const groundAt = (sx) => {
+      const wx = (sx - this.left) / this.unit + this.panX;
+      return groundY + ((wx - cx) ** 2 / (2 * EARTH_R)) * this.unit;
+    };
+    const edge = () => {
+      ctx.beginPath();
+      for (let sx = 0; sx <= w + 8; sx += 8) ctx.lineTo(sx, groundAt(sx));
+    };
+    if (space > 0) {
+      edge(); // a soft glow of atmosphere hugging the curve
+      ctx.strokeStyle = `rgba(140,200,255,${0.35 * space})`;
+      ctx.lineWidth = 18;
+      ctx.stroke();
+    }
+    edge();
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
     ctx.fillStyle = '#5cc94f';
-    ctx.fillRect(0, groundY, w, h - groundY);
-    ctx.fillStyle = '#4bb33f';
-    ctx.fillRect(0, groundY, w, 8);
+    ctx.fill();
+    edge();
+    ctx.strokeStyle = '#4bb33f';
+    ctx.lineWidth = 8;
+    ctx.stroke();
 
     this.drawTrack();
     this.drawStation();
@@ -313,7 +346,7 @@ export class DrawPad {
     for (const s of STARS) {
       const p = this.toScreen(s);
       if (p.x < -4 || p.x > this.w + 4 || p.y < -4) continue;
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - 3.5) / 2)})`;
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - STARS_FROM) / 60)})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, s.r, 0, Math.PI * 2);
       ctx.fill();
@@ -350,7 +383,7 @@ export class DrawPad {
 
   drawTrack() {
     const { ctx, groundY, k } = this;
-    const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c }));
+    const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c, high: p.y > SUPPORT_TOP }));
 
     // Support poles
     ctx.strokeStyle = '#b9c3d6';
@@ -359,7 +392,7 @@ export class DrawPad {
     let acc = 0;
     for (let i = 1; i < pts.length; i++) {
       acc += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      if (acc > Math.max(14, 34 * k) && groundY - pts[i].y > 20 * k) {
+      if (acc > Math.max(14, 34 * k) && groundY - pts[i].y > 20 * k && !pts[i].high) {
         acc = 0;
         ctx.beginPath();
         ctx.moveTo(pts[i].x, pts[i].y + 8 * k);

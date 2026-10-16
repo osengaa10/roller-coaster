@@ -330,3 +330,12 @@ canvas {
     display: grid;
   }
 }
+
+/* Darkened edges at top speed. */
+#speedfx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 45%, transparent 48%, rgba(8, 16, 32, 0.6) 100%);
+}

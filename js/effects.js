@@ -190,3 +190,39 @@ class Rocket {
     this.dot.material.dispose();
   }
 }
+
+// Wind streaks rushing past the camera when the train is really flying (child of the camera).
+export function makeStreaks(count = 80) {
+  const pos = new Float32Array(count * 6);
+  const spawn = (d, anywhere) => {
+    const a = Math.random() * Math.PI * 2;
+    const r = 2.2 + Math.random() * 6;
+    d.x = Math.cos(a) * r;
+    d.y = Math.sin(a) * r * 0.7 + 0.8; // keep most of them above the car
+    d.z = anywhere ? -Math.random() * 50 : -45 - Math.random() * 10;
+    return d;
+  };
+  const streaks = Array.from({ length: count }, () => spawn({}, true));
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const material = new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const lines = new THREE.LineSegments(geo, material);
+  lines.frustumCulled = false;
+  lines.visible = false;
+  return {
+    lines,
+    // v: speed in m/s; strength: 0..1 how visible they should be.
+    update(dt, v, strength) {
+      material.opacity = 0.45 * strength;
+      lines.visible = strength > 0.01;
+      if (!lines.visible) return;
+      const len = Math.min(4, 0.2 + v * 0.13);
+      streaks.forEach((d, i) => {
+        d.z += v * 1.4 * dt;
+        if (d.z > 2) spawn(d, false);
+        pos.set([d.x, d.y, d.z, d.x, d.y, d.z - len], i * 6);
+      });
+      geo.attributes.position.needsUpdate = true;
+    },
+  };
+}

@@ -1,9 +1,11 @@
 // The 3D world: sky, ground, trees, and everything built from a drawn track.
 import * as THREE from 'three';
 import { supportSpots, supportLegs, starSpots, splashSpot, tunnelRuns } from './track.js';
+import { makeClouds, makeMountains, makeLandscape } from './nature.js';
 
 const RAIL_GAP = 0.6; // half distance between rails
 const SPINE_DROP = 0.6; // spine center below the rails
+const HIGH = 300; // meters: above this, track geometry is built with less detail
 
 // Fresh (uncached) materials, so a track's world can be disposed in one go.
 const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
@@ -19,43 +21,10 @@ function beam(m, a, b, r) {
   return m.compose(a.clone().add(b).multiplyScalar(0.5), q, new THREE.Vector3(r, len, r));
 }
 
+// Scenery that doesn't depend on the drawing: clouds and the mountains on the horizon.
 export function makeStaticWorld() {
   const g = new THREE.Group();
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), mat('#5cc94f'));
-  ground.rotation.x = -Math.PI / 2;
-  g.add(ground);
-
-  const sun = new THREE.Mesh(new THREE.SphereGeometry(40, 24, 16), new THREE.MeshBasicMaterial({ color: '#ffe14d', fog: false }));
-  sun.position.set(-500, 400, -900);
-  g.add(sun);
-
-  // Clouds: puffy sphere clusters, scattered high up.
-  const puff = new THREE.SphereGeometry(1, 12, 8);
-  const white = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#bbbbbb' });
-  const rand = mulberry32(7);
-  for (let c = 0; c < 40; c++) {
-    const cloud = new THREE.Group();
-    for (let k = 0; k < 4; k++) {
-      const m = new THREE.Mesh(puff, white);
-      const r = 8 + rand() * 6;
-      m.scale.set(r, r * 0.7, r);
-      m.position.set(k * 10 - 15, rand() * 4, rand() * 6);
-      cloud.add(m);
-    }
-    cloud.position.set((rand() - 0.3) * 1200, 70 + rand() * 80, (rand() - 0.5) * 1200);
-    g.add(cloud);
-  }
-
-  // Far-away rolling hills.
-  const hill = new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2);
-  for (let i = 0; i < 18; i++) {
-    const a = (i / 18) * Math.PI * 2;
-    const m = new THREE.Mesh(hill, mat(i % 2 ? '#47b04a' : '#3fa05a'));
-    const r = 60 + rand() * 60;
-    m.scale.set(r * 1.6, r * 0.6, r);
-    m.position.set(Math.cos(a) * 750 + 150, 0, Math.sin(a) * 750);
-    g.add(m);
-  }
+  g.add(makeClouds(), makeMountains());
   return g;
 }
 
@@ -74,17 +43,20 @@ export function makeTrackWorld(tr, eye) {
   // Steel track: two rails and a round spine, painted in his crayon colors.
   const steel = shiny('#ffffff', { vertexColors: true });
   const railPaint = (i) => paint(i).map((v) => v * 0.8 + 0.2);
+  // Way up high nobody looks closely, so giant space coasters get fewer pieces there.
+  const high = (i) => tr.pos[i * 3 + 1] > HIGH;
+  const geoIds = all.filter((i) => !high(i) || i % 3 === 0 || i === n - 1);
   for (const s of [-1, 1]) {
-    const rail = tube(all, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 10, colorAt: railPaint });
+    const rail = tube(geoIds, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 10, colorAt: railPaint });
     g.add(new THREE.Mesh(rail, steel));
   }
-  g.add(new THREE.Mesh(tube(all, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 12, colorAt: paint }), steel));
+  g.add(new THREE.Mesh(tube(geoIds, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 12, colorAt: paint }), steel));
 
   // Cross-ties every meter: a crossbar under the rails, braced down to the spine.
   const m = new THREE.Matrix4();
   const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8);
   const unitBox = new THREE.BoxGeometry(1, 1, 1);
-  const tieIds = all.filter((i) => i % 2 === 0);
+  const tieIds = all.filter((i) => i % 2 === 0 && (!high(i) || i % 8 === 0));
   const bars = new THREE.InstancedMesh(unitBox, shiny('#ffffff'), tieIds.length);
   const braces = new THREE.InstancedMesh(unitCyl, shiny('#ffffff'), tieIds.length * 2);
   const col = new THREE.Color();
@@ -180,7 +152,10 @@ export function makeTrackWorld(tr, eye) {
   if (splash !== null) {
     pondAt = P(splash);
     const sand = new THREE.Mesh(new THREE.CircleGeometry(11, 40), mat('#e9d8a6'));
-    const water = new THREE.Mesh(new THREE.CircleGeometry(9.5, 40), mat('#3a9bdc', { emissive: '#0b3d66' }));
+    const water = new THREE.Mesh(
+      new THREE.CircleGeometry(9.5, 40),
+      new THREE.MeshPhongMaterial({ color: '#3a8fd0', emissive: '#0b3054', shininess: 120, specular: '#ffffff' }),
+    );
     sand.rotation.x = water.rotation.x = -Math.PI / 2;
     sand.position.set(pondAt.x, 0.04, pondAt.z);
     water.position.set(pondAt.x, 0.08, pondAt.z);
@@ -190,7 +165,7 @@ export function makeTrackWorld(tr, eye) {
   // Tunnels where the track skims the ground: a grassy mound outside, dark inside, stone arches.
   const tunnels = tunnelRuns(tr, splash);
   const inside = mat('#3a2a20', { side: THREE.BackSide });
-  const outside = mat('#4bb33f');
+  const outside = mat('#5aa83c');
   const stone = mat('#9a9a9a');
   for (const [a, b] of tunnels) {
     const ids = all.slice(a, b + 1);
@@ -216,31 +191,26 @@ export function makeTrackWorld(tr, eye) {
     return { holder, spin, s: i * tr.step, at: P(i).addScaledVector(U(i), eye) };
   });
 
-  // Trees and flowers sprinkled around, keeping clear of the track and pond.
+  // The landscape: grass, hills, trees and ground details, keeping clear of the track,
+  // the station and the pond.
   const box = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(tr.pos, 3));
-  const rand = mulberry32(Math.round(tr.length * 13));
-  const spots = [];
-  for (let k = 0; spots.length < 160 && k < 3000; k++) {
-    const x = box.min.x - 120 + rand() * (box.max.x - box.min.x + 240);
-    const z = box.min.z - 120 + rand() * (box.max.z - box.min.z + 240);
-    let ok = !(x > -6 && x < 15 && Math.abs(z) < 8);
-    if (pondAt && Math.hypot(pondAt.x - x, pondAt.z - z) < 14) ok = false;
-    for (let i = 0; ok && i < n; i += 4) {
-      if (Math.hypot(tr.pos[i * 3] - x, tr.pos[i * 3 + 2] - z) < 7) ok = false;
-    }
-    if (ok) spots.push([x, z, 0.7 + rand() * 0.9]);
-  }
-  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.4, 0.6, 3, 6), mat('#8a5a3c'), spots.length);
-  const tops = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 6, 8), mat('#ffffff'), spots.length);
-  const greens = ['#2e8b57', '#3cb371', '#228b22', '#56c271'].map((c) => new THREE.Color(c));
-  spots.forEach(([x, z, s], k) => {
-    m.makeScale(s, s, s).setPosition(x, 1.5 * s, z);
-    trunks.setMatrixAt(k, m);
-    m.makeScale(s, s, s).setPosition(x, 5.5 * s, z);
-    tops.setMatrixAt(k, m);
-    tops.setColorAt(k, greens[k % greens.length]);
-  });
-  g.add(trunks, tops);
+  // Only track near the ground can bump into trees and bushes.
+  const low = [];
+  for (let i = 0; i < n; i += 4) if (tr.pos[i * 3 + 1] < 40) low.push(tr.pos[i * 3], tr.pos[i * 3 + 2]);
+  const keepOut = (x, z, d) => {
+    if (x > -8 && x < 16 && Math.abs(z) < 9) return true; // station
+    if (pondAt && Math.hypot(pondAt.x - x, pondAt.z - z) < 12) return true;
+    for (let k = 0; k < low.length; k += 2) if (Math.hypot(low[k] - x, low[k + 1] - z) < d) return true;
+    return false;
+  };
+  // A spot on the ground beside the track: u picks how far along, d how far to the side.
+  const nearTrack = (u, d, sgn) => {
+    const i = Math.min(n - 1, Math.floor(u * n));
+    const t = T(i);
+    const flatLen = Math.hypot(t.x, t.z) || 1;
+    return { x: tr.pos[i * 3] - (t.z / flatLen) * d * sgn, z: tr.pos[i * 3 + 2] + (t.x / flatLen) * d * sgn };
+  };
+  g.add(makeLandscape(box, keepOut, nearTrack));
 
   return { group: g, stars, splash, tunnels };
 }
@@ -346,32 +316,38 @@ export function makeSpace() {
   stars.frustumCulled = false;
   g.add(stars);
 
-  const saturn = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 20), mat('#e8c27a', { emissive: '#4a3a1a' }));
+  // Planets only show up in space: they fade in with the stars.
+  const faint = { transparent: true, opacity: 0, fog: false, depthWrite: false };
+  const saturn = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 20), mat('#e8c27a', { emissive: '#4a3a1a', ...faint }));
   saturn.position.set(900, 650, -900);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(100, 160, 64), mat('#d9b77a', { side: THREE.DoubleSide, emissive: '#3a2e14' }));
+  const ring = new THREE.Mesh(new THREE.RingGeometry(100, 160, 64), mat('#d9b77a', { side: THREE.DoubleSide, emissive: '#3a2e14', ...faint }));
   ring.position.copy(saturn.position);
   ring.rotation.set(-1.2, 0.3, 0);
-  const moon = new THREE.Mesh(new THREE.SphereGeometry(45, 28, 18), mat('#e9e9ee', { emissive: '#444450' }));
+  const moon = new THREE.Mesh(new THREE.SphereGeometry(45, 28, 18), mat('#e9e9ee', { emissive: '#444450', ...faint }));
   moon.position.set(-500, 520, -700);
-  const mars = new THREE.Mesh(new THREE.SphereGeometry(32, 24, 16), mat('#d9623b', { emissive: '#4a1a0a' }));
+  const mars = new THREE.Mesh(new THREE.SphereGeometry(32, 24, 16), mat('#d9623b', { emissive: '#4a1a0a', ...faint }));
   mars.position.set(300, 900, 800);
   g.add(saturn, ring, moon, mars);
 
+  // Planets hang in fixed directions in the sky (ahead of the coaster and up high), moving with
+  // the camera like the stars do, so they're there no matter how high he goes.
   const planets = [
-    [saturn, [700, 520, -500]],
-    [ring, [700, 520, -500]],
-    [moon, [420, 680, 420]],
-    [mars, [1000, 860, 120]],
-  ];
+    [saturn, new THREE.Vector3(0.6, 0.55, -0.55)],
+    [ring, new THREE.Vector3(0.6, 0.55, -0.55)],
+    [moon, new THREE.Vector3(0.35, 0.75, 0.55)],
+    [mars, new THREE.Vector3(0.85, 0.5, 0.15)],
+  ].map(([mesh, dir]) => [mesh, dir.normalize().multiplyScalar(1500)]);
   return {
     group: g,
-    // Hang the planets ahead of the coaster and up high, where he'll see them on the climb.
-    place(centerX) {
-      for (const [mesh, [x, y, z]] of planets) mesh.position.set(centerX + x, y, z);
-    },
+    place() {},
     update(cameraPos, t) {
       stars.position.copy(cameraPos);
       stars.material.opacity = t;
+      for (const [mesh, offset] of planets) {
+        mesh.position.copy(cameraPos).add(offset);
+        mesh.material.opacity = t;
+        mesh.visible = t > 0.01;
+      }
     },
   };
 }

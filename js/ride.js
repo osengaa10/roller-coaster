@@ -4,38 +4,49 @@ import { V_MAX } from './track.js';
 import * as sound from './sound.js';
 import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree } from './scenery.js';
 import { makeSeatCar, makeTrainCar, makeRider, makeHands, FRIENDS, FRIEND_SEAT } from './characters.js';
-import { Effects } from './effects.js';
+import { Effects, makeStreaks } from './effects.js';
+import { makeSky, SUN_DIR, EARTH_R } from './nature.js';
 
 const EYE = 1.3; // seat height above the track
 const LOOK_AHEAD = 6; // meters
 const START_DELAY = 1.3; // seconds sitting in the station before rolling
 const CAR_GAP = 2.7; // meters between train cars
-const SKY = new THREE.Color('#8fd3ff');
-const DUSK = new THREE.Color('#4a5aa8');
+// Sky colors (overhead / at the horizon), for day and for the sunset at the finish.
+const TOP = new THREE.Color('#2f7fd8');
+const HORIZON = new THREE.Color('#cfe8fb');
+const DUSK_TOP = new THREE.Color('#3a3f8f');
+const DUSK_HORIZON = new THREE.Color('#f4a37c');
 const SPACE = new THREE.Color('#060820');
-const SPACE_FROM = 110; // meters: the sky starts getting dark
-const SPACE_TO = 260; // meters: full outer space
+const SPACE_FROM = 300; // meters: the sky starts getting darker
+const SPACE_TO = 6000; // meters: full outer space (the change is spread out on a log scale)
 
 export class Ride {
   constructor(canvas, { onFinish = () => {}, onStar = () => {} } = {}) {
     this.onFinish = onFinish;
     this.onStar = onStar;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // Log depth: the view goes from the lap bar a meter away to the Earth's horizon 60 km off.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.scene = new THREE.Scene();
-    this.scene.background = SKY.clone();
-    this.scene.fog = new THREE.Fog(SKY.clone(), 120, 650);
-    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 2000);
+    this.scene.fog = new THREE.Fog(HORIZON.clone(), 250, 2600); // haze: far things fade into the sky
+    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 4000);
     this.scene.add(this.camera);
 
-    this.scene.add(new THREE.HemisphereLight('#ffffff', '#5cc94f', 1.6));
-    const sun = new THREE.DirectionalLight('#ffffff', 1.6);
-    sun.position.set(-100, 200, 80);
+    this.scene.add(new THREE.HemisphereLight('#dcefff', '#4a7a3a', 1.2));
+    const sun = new THREE.DirectionalLight('#fff1d6', 2.3);
+    sun.position.copy(SUN_DIR).multiplyScalar(300);
     this.scene.add(sun);
+    this.skyDome = makeSky();
+    this.scene.add(this.skyDome.mesh);
     this.scene.add(makeStaticWorld());
     this.space = makeSpace();
     this.scene.add(this.space.group);
-    this.sky = new THREE.Color();
+
+    // Speed: wind streaks past the camera, darkened edges, a wider view and a little rumble.
+    this.streaks = makeStreaks();
+    this.camera.add(this.streaks.lines);
+    this.speedfx = document.getElementById('speedfx');
+    this.fovBoost = 0;
 
     // Front-seat view: the car nose and his own arms hang off the camera.
     this.seatCar = makeSeatCar();
@@ -76,7 +87,8 @@ export class Ride {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     // Keep a wide view in portrait too.
-    this.camera.fov = w < h ? 95 : 75;
+    this.baseFov = w < h ? 95 : 75;
+    this.camera.fov = this.baseFov + (this.fovBoost || 0);
     this.camera.updateProjectionMatrix();
   }
 
@@ -126,6 +138,7 @@ export class Ride {
   stop() {
     this.running = false;
     this.effects.clear();
+    if (this.speedfx) this.speedfx.style.opacity = '0';
     sound.windStop();
   }
 
@@ -186,7 +199,7 @@ export class Ride {
     this.handsTimer = Math.max(0, this.handsTimer - dt);
     this.cheer = Math.max(0, this.cheer - dt);
     const handsUp = this.handsTimer > 0 || this.finished;
-    const speed01 = this.v / V_MAX;
+    const speed01 = Math.min(1, this.v / V_MAX);
     this.hands.update(dt, this.handsTimer > 0);
     if (this.mode !== 'seat') this.hands.group.visible = false; // his arms belong to the front-seat view
     this.kid.update(dt, handsUp ? 1 : 0, speed01);
@@ -199,21 +212,48 @@ export class Ride {
     this.placeTrain();
     if (this.mode === 'seat') this.placeSeatCamera(this.s, 1 - Math.exp(-dt * 8));
     else this.placeChaseCamera(dt, false);
+    this.speedFeel(dt, speed01);
     this.updateSky();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.loop);
   }
 
-  // Blue sky, dusk at the finish, and outer space when the camera climbs high enough.
+  // The faster he goes, the wider the view, the more it rumbles, and the more wind streaks by.
+  speedFeel(dt, speed01) {
+    const seat = this.mode === 'seat';
+    const fast = Math.min(1, Math.max(0, (speed01 - 0.25) / 0.75));
+    const boost = (seat ? 18 : 8) * fast * fast * (3 - 2 * fast);
+    this.fovBoost += (boost - this.fovBoost) * Math.min(1, dt * 3);
+    this.camera.fov = this.baseFov + this.fovBoost;
+    this.camera.updateProjectionMatrix();
+    if (seat && this.v > 0) {
+      const t = this.time;
+      const amp = 0.045 * speed01 * speed01;
+      this.camera.translateX(amp * (Math.sin(t * 31) * 0.6 + Math.sin(t * 53 + 1.3) * 0.4));
+      this.camera.translateY(amp * (Math.sin(t * 37 + 0.7) * 0.6 + Math.sin(t * 67) * 0.4));
+      this.camera.rotateZ(amp * 0.1 * Math.sin(t * 43));
+    }
+    const streak = seat ? Math.min(1, Math.max(0, (speed01 - 0.35) / 0.45)) : 0;
+    this.streaks.update(dt, this.v, streak);
+    if (this.speedfx) this.speedfx.style.opacity = String(seat ? 0.75 * Math.max(0, (speed01 - 0.45) / 0.55) : 0);
+  }
+
+  // Blue sky with a haze at the horizon, a sunset at the finish, and outer space up high.
   updateSky() {
     const h = this.camera.position.y;
-    const t = Math.min(1, Math.max(0, (h - SPACE_FROM) / (SPACE_TO - SPACE_FROM)));
+    const t = Math.min(1, Math.max(0, Math.log(Math.max(h, 1) / SPACE_FROM) / Math.log(SPACE_TO / SPACE_FROM)));
     const space = t * t * (3 - 2 * t);
-    this.sky.copy(SKY).lerp(DUSK, this.dusk).lerp(SPACE, space);
-    this.scene.background.copy(this.sky);
-    this.scene.fog.color.copy(this.sky);
-    this.scene.fog.near = 120 + space * 800;
-    this.scene.fog.far = 650 + space * 3500;
+    // See all the way to the curved horizon from up high.
+    const horizon = Math.sqrt(2 * EARTH_R * Math.max(h, 0));
+    this.camera.far = Math.max(4000, horizon * 1.3 + 2000);
+    const u = this.skyDome.uniforms;
+    u.top.value.copy(TOP).lerp(DUSK_TOP, this.dusk);
+    u.horizon.value.copy(HORIZON).lerp(DUSK_HORIZON, this.dusk);
+    u.spaceMix.value = space;
+    this.skyDome.mesh.position.copy(this.camera.position);
+    this.scene.fog.color.copy(u.horizon.value).lerp(SPACE, space);
+    this.scene.fog.near = 250 + h * 2;
+    this.scene.fog.far = 2600 + h * 9;
     this.space.update(this.camera.position, space);
   }
 
@@ -221,10 +261,11 @@ export class Ride {
   triggers() {
     const tr = this.track;
     const i = Math.round(this.s / tr.step);
-    sound.windSpeed(this.v / V_MAX);
+    sound.windSpeed(Math.min(1, this.v / V_MAX));
 
-    if (tr.lift[i] && this.s - this.lastClack > 1.2) {
+    if (tr.lift[i] && this.s - this.lastClack > 1.2 && this.time - (this.lastClackTime || 0) > 0.09) {
       this.lastClack = this.s;
+      this.lastClackTime = this.time;
       sound.clack();
     }
     while (this.nextWhee < tr.whee.length && tr.whee[this.nextWhee] <= i) {
@@ -309,6 +350,13 @@ export class Ride {
     const sideways = new THREE.Vector3(-this.chaseDir.z, 0, this.chaseDir.x);
     const want = p.clone().addScaledVector(this.chaseDir, -9).addScaledVector(sideways, -5);
     want.y = Math.max(p.y + 4, 2.5);
+    if (this.chaseLast && !snap) {
+      // Move along with the train first, so even at space speeds the camera keeps up.
+      const moved = p.clone().sub(this.chaseLast);
+      this.chasePos.add(moved);
+      this.chaseLook.add(moved);
+    }
+    this.chaseLast = p.clone();
     if (snap) {
       this.chasePos.copy(want);
       this.chaseLook.copy(p);

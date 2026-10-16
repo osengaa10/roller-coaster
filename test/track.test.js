@@ -203,13 +203,45 @@ test('every support sits right under the spine of upright track, even around loo
     const spots = supportSpots(tr);
     assert.ok(spots.length > 3);
     for (const sp of spots) {
+      // The column top must be the spine of upright-ish track (spine = 0.6 m under the rails).
       let held = false;
       for (let j = 0; j < tr.count && !held; j++) {
-        const dx = Math.hypot(tr.pos[j * 3] - sp.x, tr.pos[j * 3 + 2] - sp.z);
-        const above = tr.pos[j * 3 + 1] - sp.y;
-        held = dx < 0.25 && above > 0.45 && above < 0.65 && tr.up[j * 3 + 1] > 0.75;
+        const spine = [0, 1, 2].map((k) => tr.pos[j * 3 + k] - tr.up[j * 3 + k] * 0.6);
+        const d = Math.hypot(spine[0] - sp.x, spine[1] - sp.y, spine[2] - sp.z);
+        held = d < 0.3 && tr.up[j * 3 + 1] > 0.3;
       }
       assert.ok(held, `support at ${sp.x.toFixed(1)},${sp.y.toFixed(1)} holds nothing`);
     }
   }
+});
+
+test('steep lift hills get supports too', () => {
+  const steep = stroke((t) => ({ x: 0.3 + t * 0.25, y: 0.06 + t * 0.6 }));
+  const tr = buildTrack([[...steep, ...stroke((t) => ({ x: 0.55 + t * 0.5, y: 0.66 - t * 0.6 }))]]);
+  const spots = supportSpots(tr).filter((s) => s.x > 13 && s.x < 22);
+  assert.ok(spots.length >= 1, 'the ~65 degree climb has supports');
+});
+
+// A climb way up into space, as drawn when he holds against the top edge.
+const space = [
+  ...stroke((t) => ({ x: 0.3 + t * 40, y: 0.06 + t * 240 }), 300),
+  ...stroke((t) => ({ x: 40.3 + t * 40, y: 240 - t * 239.9 }), 300),
+];
+
+test('a giant space coaster stays a sensible size', () => {
+  const tr = buildTrack([space]);
+  assertFinite(tr);
+  assert.ok(tr.count <= 16100, `too many samples: ${tr.count}`);
+  assert.ok(Math.max(...Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1])) > 9000, 'reaches ~10 km');
+  assert.ok(starSpots(tr).length <= 41);
+  assert.ok(supportSpots(tr).every((s) => s.y < 301), 'no supports up in space');
+});
+
+test('speeds stay smooth: never faster than 100 m/s, and a 10 km hill rides in minutes', () => {
+  const tr = buildTrack([space]);
+  assert.ok(Math.max(...tr.speed) <= 100);
+  let seconds = 0;
+  for (let i = 1; i < tr.count; i++) seconds += tr.step / tr.speed[i];
+  assert.ok(seconds < 360, `ride takes ${seconds.toFixed(0)} s`);
+  assert.ok(Math.max(...tr.speed) > 45, 'giant drops really fly');
 });
