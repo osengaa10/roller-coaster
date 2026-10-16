@@ -200,3 +200,84 @@ canvas {
     transform: translateY(115vh) rotate(720deg);
   }
 }
+
+/* --- Crayons ------------------------------------------------------------------- */
+#crayons {
+  position: absolute;
+  top: 0;
+  left: max(12px, env(safe-area-inset-left));
+  display: flex;
+  gap: 6px;
+}
+.crayon {
+  width: 56px;
+  height: 126px;
+  padding: 0;
+  border: 0;
+  background: none;
+  transform: translateY(-58px);
+  transition: transform 0.2s cubic-bezier(0.3, 1.6, 0.5, 1);
+  touch-action: manipulation;
+  filter: drop-shadow(0 4px 3px rgba(0, 0, 0, 0.25));
+  cursor: pointer;
+}
+.crayon svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(180deg); /* tip points down at the page */
+}
+.crayon.selected {
+  transform: translateY(-6px);
+}
+
+/* --- Ride HUD ------------------------------------------------------------------ */
+#look .seat,
+#look.outside .eye {
+  display: none;
+}
+#look.outside .seat {
+  display: block;
+}
+#hud {
+  position: absolute;
+  top: max(20px, env(safe-area-inset-top));
+  right: max(20px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 22px 8px 14px;
+  border-radius: 48px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 5px solid #ffd23f;
+  font: 900 52px/1 system-ui, sans-serif;
+  color: #e09f00;
+  pointer-events: none;
+}
+#hud .star {
+  font-size: 48px;
+}
+#hud.bump {
+  animation: bump 0.35s;
+}
+@keyframes bump {
+  40% {
+    transform: scale(1.3);
+  }
+}
+
+#finish {
+  grid-auto-flow: row;
+  align-content: center;
+  gap: 36px;
+}
+#tally {
+  max-width: 90vw;
+  text-align: center;
+  font: 900 64px/1.1 system-ui, sans-serif;
+  color: #fff;
+  text-shadow: 0 4px 0 #e09f00, 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+#tally span {
+  display: inline-block;
+  animation: popin 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}

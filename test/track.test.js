@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, drawnLength, resample, smooth, supportSpots, V_MIN, STATION } from '../js/track.js';
+import {
+  buildTrack, drawnLength, resample, smooth, supportSpots, starSpots, tunnelRuns, splashSpot,
+  colorAt, normalizeStroke, RAINBOW, V_MIN, STATION,
+} from '../js/track.js';
 
 // A stroke helper: f(t) for t in [0, 1] -> {x, y}
 const stroke = (f, n = 120) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
@@ -112,4 +115,60 @@ test('pillars never go through other parts of the track', () => {
     const hits = pillarHits(tr, supportSpots(tr));
     assert.equal(hits.length, 0, `pillar through track at ${JSON.stringify(hits[0])}`);
   }
+});
+
+// --- Round 2: colors, stars, tunnels, splash -------------------------------------------
+
+test('each stroke keeps its crayon color on the 3D track', () => {
+  const blue = { c: 3, p: hill.slice(0, 60) };
+  const green = { c: 2, p: hill.slice(60) };
+  const tr = buildTrack([blue, green]);
+  const colors = new Set();
+  for (let i = 0; i < tr.count; i++) colors.add([0, 1, 2].map((k) => tr.rgb[i * 3 + k].toFixed(3)).join());
+  for (const c of [0, 2, 3]) assert.ok(colors.has(colorAt(c).map((v) => v.toFixed(3)).join()), `missing color ${c}`);
+  assert.ok(tr.rgb.every(Number.isFinite));
+});
+
+test('rainbow crayon makes many colors', () => {
+  const tr = buildTrack([{ c: RAINBOW, p: hill }]);
+  const hues = new Set();
+  for (let i = 0; i < tr.count; i++) hues.add(tr.rgb[i * 3].toFixed(2) + tr.rgb[i * 3 + 2].toFixed(2));
+  assert.ok(hues.size > 20);
+});
+
+test('old saved drawings (bare point arrays) still work', () => {
+  const tr = buildTrack([hill]);
+  assert.ok(tr.count > 100);
+  assert.deepEqual(normalizeStroke(hill), { c: 0, p: hill });
+});
+
+test('stars are spread along the ride, never in the station or brakes', () => {
+  const tr = buildTrack([hill]);
+  const stars = starSpots(tr);
+  assert.ok(stars.length >= 3);
+  for (const i of stars) {
+    assert.ok(i * tr.step > 15, 'not in the station');
+    assert.ok(tr.length - i * tr.step > 25, 'not in the brake run');
+  }
+});
+
+const ground = (x0, x1) => stroke((t) => ({ x: x0 + t * (x1 - x0), y: 0.04 }));
+
+test('long ground-hugging stretch gets a tunnel; a tall hill does not', () => {
+  const tr = buildTrack([ground(0.3, 2.0)]);
+  const runs = tunnelRuns(tr);
+  assert.ok(runs.length >= 1);
+  for (const [a, b] of runs) assert.ok((b - a) * tr.step >= 15 && (b - a) * tr.step <= 40.5);
+  const tall = buildTrack([stroke((t) => ({ x: 0.3 + t * 1.2, y: 0.4 + 0.3 * Math.sin(Math.PI * t) }))]);
+  assert.equal(tunnelRuns(tall).length, 0);
+});
+
+test('splash pond sits at the bottom of a big drop, not on flat track', () => {
+  const drop = [...stroke((t) => ({ x: 0.3 + t * 0.4, y: 0.06 + t * 0.6 })), ...stroke((t) => ({ x: 0.7 + t * 0.3, y: 0.66 - t * 0.62 })), ...ground(1.0, 1.6)];
+  const tr = buildTrack([drop]);
+  const i = splashSpot(tr);
+  assert.notEqual(i, null);
+  assert.ok(tr.pos[i * 3 + 1] < 4.5);
+  for (const [a, b] of tunnelRuns(tr, i)) assert.ok(i < a - 20 || i > b + 20, 'tunnel keeps clear of the pond');
+  assert.equal(splashSpot(buildTrack([ground(0.3, 1.5)])), null);
 });

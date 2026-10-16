@@ -1,5 +1,5 @@
 // The drawing screen: a side view of a sunny park where a finger drag lays down track.
-import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength } from './track.js';
+import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, cssColor } from './track.js';
 import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
@@ -10,7 +10,8 @@ export class DrawPad {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.hand = hand;
-    this.strokes = strokes;
+    this.strokes = strokes; // [{ c: crayon index, p: [points] }]
+    this.color = 0;
     this.history = [];
     this.onChange = onChange;
     this.pointerId = null;
@@ -79,7 +80,7 @@ export class DrawPad {
     }
     this.pushHistory();
     const p = this.toTrack(e.clientX, e.clientY);
-    this.strokes.push([p]);
+    this.strokes.push({ c: this.color, p: [p] });
     this.lastScreen = { x: e.clientX, y: e.clientY };
     sound.drawStart(p.y);
     this.dirty = true;
@@ -88,7 +89,7 @@ export class DrawPad {
   move(e) {
     if (e.pointerId !== this.pointerId) return;
     e.preventDefault();
-    const stroke = this.strokes[this.strokes.length - 1];
+    const stroke = this.strokes[this.strokes.length - 1].p;
     const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     for (const ev of events.length ? events : [e]) {
       if (Math.hypot(ev.clientX - this.lastScreen.x, ev.clientY - this.lastScreen.y) < 4) continue;
@@ -108,7 +109,7 @@ export class DrawPad {
   }
 
   pushHistory() {
-    this.history.push(this.strokes.map((s) => s.slice()));
+    this.history.push(this.strokes.map((s) => ({ c: s.c, p: s.p.slice() })));
     if (this.history.length > MAX_HISTORY) this.history.shift();
   }
 
@@ -176,7 +177,7 @@ export class DrawPad {
 
   drawTrack() {
     const { ctx, groundY } = this;
-    const pts = pathFromStrokes(this.strokes).map((p) => this.toScreen(p));
+    const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c }));
 
     // Support poles
     ctx.strokeStyle = '#b9c3d6';
@@ -217,11 +218,28 @@ export class DrawPad {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineCap = 'round';
-    // Rail
-    path();
-    ctx.strokeStyle = '#e63946';
+    // Rail, in each stroke's crayon color. Same-colored pieces are batched into one path.
     ctx.lineWidth = 8;
-    ctx.stroke();
+    let along = 0;
+    let color = null;
+    const mid = (i) => ({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
+    for (let i = 1; i < pts.length; i++) {
+      along += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) / this.unit;
+      const c = cssColor(pts[i].c, along);
+      if (c !== color) {
+        if (color) ctx.stroke();
+        color = c;
+        ctx.strokeStyle = c;
+        ctx.beginPath();
+        const from = i === 1 ? pts[0] : mid(i - 1);
+        ctx.moveTo(from.x, from.y);
+      }
+      if (i < pts.length - 1) {
+        const to = mid(i);
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, to.x, to.y);
+      } else ctx.lineTo(pts[i].x, pts[i].y);
+    }
+    if (color) ctx.stroke();
     path();
     ctx.strokeStyle = 'rgba(255,255,255,0.45)';
     ctx.lineWidth = 2;

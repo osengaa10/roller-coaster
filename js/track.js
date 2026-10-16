@@ -18,13 +18,50 @@ const BRAKE_DECEL = 7;
 const Z_DRIFT = 0.4; // sideways shift per unit of backwards travel, keeps loops from hitting themselves
 const LONG_INVERSION = 22; // meters; longer upside-down runs get rolled back upright
 
+// Crayon colors. Index RAINBOW cycles through hues along the track.
+export const TRACK_COLORS = ['#e63946', '#ff8c42', '#3bb273', '#3a86ff', '#9b5de5'];
+export const RAINBOW = TRACK_COLORS.length;
+const RAINBOW_PERIOD = 1.5; // normalized units per trip around the color wheel
+
+// [r, g, b] in 0..1 for a crayon index at a distance (normalized units) along the track.
+export function colorAt(c, d = 0, steps = 0) {
+  if (c !== RAINBOW) {
+    const hex = TRACK_COLORS[c] || TRACK_COLORS[0];
+    return [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16) / 255);
+  }
+  let h = (((d / RAINBOW_PERIOD) % 1) + 1) % 1;
+  if (steps) h = Math.round(h * steps) / steps;
+  return hsl(h, 0.85, 0.55);
+}
+
+export function cssColor(c, d = 0) {
+  const [r, g, b] = colorAt(c, d, 24).map((v) => Math.round(v * 255));
+  return `rgb(${r},${g},${b})`;
+}
+
+function hsl(h, s, l) {
+  const f = (n) => {
+    const k = (n + h * 12) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  return [f(0), f(8), f(4)];
+}
+
+// Strokes are { c: crayon, p: [points] }. Older saves were bare point arrays.
+export function normalizeStroke(s) {
+  return Array.isArray(s) ? { c: 0, p: s } : s;
+}
+
 // The full 2D path the player sees: station, then everything drawn, joined end to end.
 export function pathFromStrokes(strokes) {
   const path = [
-    { x: STATION.x0, y: STATION.y },
-    { x: STATION.x1, y: STATION.y },
+    { x: STATION.x0, y: STATION.y, c: 0 },
+    { x: STATION.x1, y: STATION.y, c: 0 },
   ];
-  for (const stroke of strokes) for (const p of stroke) path.push({ x: p.x, y: p.y });
+  for (const stroke of strokes) {
+    const { c, p } = normalizeStroke(stroke);
+    for (const pt of p) path.push({ x: pt.x, y: pt.y, c });
+  }
   return path;
 }
 
@@ -39,6 +76,8 @@ export function drawnLength(strokes) {
 }
 
 // Evenly spaced points along a polyline (works for any dimension via keys).
+// A crayon index `c` rides along un-interpolated: each segment takes its end point's color,
+// so the line joining two strokes matches the new stroke.
 export function resample(pts, spacing, keys = ['x', 'y']) {
   const clean = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
@@ -57,6 +96,7 @@ export function resample(pts, spacing, keys = ['x', 'y']) {
       const f = t / seg;
       const p = {};
       for (const k of keys) p[k] = a[k] + (b[k] - a[k]) * f;
+      if ('c' in b) p.c = b.c;
       out.push(p);
       t += spacing;
     }
@@ -99,7 +139,7 @@ export function buildTrack(strokes) {
   }
   const end = drawn[drawn.length - 1];
   const withBrake = resample(
-    [...drawn, { x: end.x + dirX * 0.06, y: end.y }, { x: end.x + dirX * BRAKE_LENGTH, y: end.y }],
+    [...drawn, { x: end.x + dirX * 0.06, y: end.y, c: 0 }, { x: end.x + dirX * BRAKE_LENGTH, y: end.y, c: 0 }],
     0.012,
   );
   const flat = smooth(withBrake, 10);
@@ -109,7 +149,7 @@ export function buildTrack(strokes) {
   let z = 0;
   const pts3 = flat.map((p, i) => {
     if (i > 0) z += Math.max(0, flat[i - 1].x - p.x) * Z_DRIFT;
-    return { x: (p.x - STATION.x0) * WORLD_SCALE, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE };
+    return { x: (p.x - STATION.x0) * WORLD_SCALE, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE, c: p.c ?? 0 };
   });
   const keys3 = ['x', 'y', 'z'];
   const samples = smooth(resample(smooth(pts3, 4, keys3), STEP, keys3), 3, keys3);
@@ -186,7 +226,11 @@ export function buildTrack(strokes) {
     if (drop > 9 && (whee.length === 0 || (i - whee[whee.length - 1]) * STEP > 40)) whee.push(i);
   }
 
-  return { count: n, step: STEP, length, pos, tan, up, speed, lift, whee };
+  // 6. Paint: one color per sample, rainbow measured along the track.
+  const rgb = new Float32Array(n * 3);
+  samples.forEach((p, i) => rgb.set(colorAt(p.c ?? 0, (i * STEP) / WORLD_SCALE), i * 3));
+
+  return { count: n, step: STEP, length, pos, tan, up, speed, lift, whee, rgb };
 }
 
 // Where to stand support pillars: one every few meters, from just under the track down to
@@ -218,6 +262,70 @@ export function supportSpots(track) {
     if (!blocked) spots.push(base);
   }
   return spots;
+}
+
+// The ride proper, between leaving the station and reaching the brake run (sample indices).
+function rideSpan(track, startMeters = 18, endMeters = 30) {
+  return [Math.round(startMeters / track.step), track.count - 1 - Math.round(endMeters / track.step)];
+}
+
+// Stars to fly through: one every STAR_EVERY meters along the ride.
+const STAR_EVERY = 25;
+export function starSpots(track) {
+  const [a, b] = rideSpan(track);
+  const out = [];
+  for (let i = a; i <= b; i += Math.round(STAR_EVERY / track.step)) out.push(i);
+  return out;
+}
+
+// The splash pond goes in the deepest low dip that comes right after a big drop.
+const SPLASH_LOW = 4.5; // meters
+const SPLASH_DROP = 10;
+export function splashSpot(track) {
+  const { pos, up, step } = track;
+  const y = (i) => pos[i * 3 + 1];
+  const [a, b] = rideSpan(track);
+  const back = Math.round(40 / step);
+  const win = Math.round(5 / step);
+  let best = null;
+  let bestDrop = 0;
+  for (let i = a; i <= b; i++) {
+    if (y(i) > SPLASH_LOW || up[i * 3 + 1] < 0.5) continue;
+    let isMin = true;
+    for (let j = Math.max(0, i - win); j <= Math.min(track.count - 1, i + win) && isMin; j++) if (y(j) < y(i)) isMin = false;
+    if (!isMin) continue;
+    let peak = 0;
+    for (let j = Math.max(0, i - back); j < i; j++) peak = Math.max(peak, y(j));
+    if (peak - y(i) >= SPLASH_DROP && peak - y(i) > bestDrop) {
+      best = i;
+      bestDrop = peak - y(i);
+    }
+  }
+  return best;
+}
+
+// Tunnels: stretches that skim along the ground. Index ranges [start, end].
+const TUNNEL_LOW = 3.5; // meters
+const TUNNEL_MIN = 15;
+const TUNNEL_MAX = 40;
+export function tunnelRuns(track, splash = splashSpot(track)) {
+  const { pos, up, step } = track;
+  const [a, b] = rideSpan(track, 14, 32);
+  const clear = Math.round(14 / step);
+  const ok = (i) =>
+    pos[i * 3 + 1] < TUNNEL_LOW && up[i * 3 + 1] > 0.7 && (splash === null || Math.abs(i - splash) > clear);
+  const runs = [];
+  for (let i = a; i <= b; ) {
+    if (!ok(i)) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 <= b && ok(j + 1)) j++;
+    if ((j - i) * step >= TUNNEL_MIN) runs.push([i, Math.min(j, i + Math.round(TUNNEL_MAX / step))]);
+    i = j + 1;
+  }
+  return runs;
 }
 
 function boxBlur(arr, r) {

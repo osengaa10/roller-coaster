@@ -2,9 +2,17 @@
 
 A roller coaster game for little kids (built for a 4-year-old on an iPad).
 
-1. **Draw** the coaster with your finger: hills, big drops, loop-de-loops. The track always starts at the little station.
+1. **Draw** the coaster with your finger: hills, big drops, loop-de-loops. The track always starts at the little station. Tap a crayon at the top to change the track color (the striped one is rainbow).
 2. Tap the big green **▶** button.
-3. **Ride it** in first person, then ride again or draw a new one.
+3. **Ride it** in first person with an animal friend (a different one each time), then ride again or draw a new one.
+
+Things that happen on their own during the ride:
+- **Stars** float along the track. Fly through them to collect them, then count them at the end.
+- **Tunnels** appear where the track skims along the ground.
+- A **splash pond** appears at the bottom of the biggest drop.
+- **Fireworks** go off at the finish.
+
+**Tap anywhere** during the ride to throw your hands up. Tap the **eye** button to watch the train from outside, and tap it again to get back in the front seat.
 
 No reading needed, no menus, and nothing can go wrong: the train never gets stuck, lifting your finger and drawing again just keeps adding track, and undo can even bring back a cleared drawing.
 
@@ -13,7 +21,9 @@ No reading needed, no menus, and nothing can go wrong: the train never gets stuc
 | ▶ (green, wiggles when ready) | Ride it |
 | ↩ (blue) | Undo the last line |
 | 🗑 (orange) | Start over (undo brings it back) |
+| Crayons (top-left) | Pick the track color |
 | 🏠 (purple, during ride) | Back to drawing |
+| 👁 / seat (blue, during ride) | Watch from outside / back to the front seat |
 | ⟳ / ✏️ (after ride) | Ride again / draw again |
 
 ## Play on the iPad
@@ -35,7 +45,10 @@ Add `?fast=4` to the URL to speed up the ride while testing.
 ## How it works
 
 - `js/draw.js`: the side-view drawing canvas (pointer events, iOS gesture blocking).
-- `js/track.js`: pure math that turns the finger path into a smooth 3D track. Loops tilt slightly sideways so they don't hit themselves. Long right-to-left stretches get barrel-rolled back upright. The speed profile uses gravity on drops, plus a chain lift so it never stalls.
-- `js/ride.js`: the Three.js scene and first-person camera.
+- `js/track.js`: pure math that turns the finger path into a smooth 3D track. Loops tilt slightly sideways so they don't hit themselves. Long right-to-left stretches get barrel-rolled back upright. The speed profile uses gravity on drops, plus a chain lift so it never stalls. It also picks the spots for stars, tunnels and the pond.
+- `js/ride.js`: runs the ride, both cameras, and the events along the track.
+- `js/scenery.js`: the 3D world (painted track, tunnels, pond, stars, trees).
+- `js/characters.js`: the train cars, him, and the animal friends.
+- `js/effects.js`: particles for sparkles, splashes and fireworks.
 - `js/sound.js`: every sound is synthesized with Web Audio (no audio files).
 - `vendor/three.module.min.js`: Three.js r169, vendored so it works offline.

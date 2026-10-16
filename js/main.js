@@ -14,7 +14,7 @@ document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: fal
 document.addEventListener('pointerdown', sound.unlock, { capture: true });
 
 const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(), onChange: changed });
-const ride = new Ride($('view'), { onFinish: celebrate });
+const ride = new Ride($('view'), { onFinish: celebrate, onStar: showStars });
 let track = null;
 
 function changed() {
@@ -35,6 +35,8 @@ function show(id) {
 function startRide() {
   $('finish').classList.remove('show');
   $('confetti').replaceChildren();
+  $('tally').replaceChildren();
+  $('hud-count').textContent = '0';
   show('ride');
   ride.resize();
   track ??= buildTrack(pad.strokes);
@@ -47,7 +49,29 @@ function backToDrawing() {
   show('draw');
 }
 
-function celebrate() {
+function showStars(n) {
+  const hud = $('hud');
+  $('hud-count').textContent = String(n);
+  hud.classList.remove('bump');
+  void hud.offsetWidth;
+  hud.classList.add('bump');
+}
+
+// Up to 10 stars are shown one by one so he can count them; more than that shows a number.
+function showTally(n) {
+  const tally = $('tally');
+  if (n === 0) return;
+  const items = n <= 10 ? Array(n).fill('⭐') : ['⭐', String(n)];
+  items.forEach((text, i) => {
+    const span = document.createElement('span');
+    span.textContent = text;
+    span.style.animationDelay = `${0.6 + i * 0.25}s`;
+    tally.append(span);
+  });
+}
+
+function celebrate(stars) {
+  showTally(stars);
   const bits = ['⭐', '🎉', '🌟', '🎈', '✨', '❤️'];
   const box = $('confetti');
   for (let i = 0; i < 40; i++) {
@@ -77,6 +101,20 @@ tap('go', () => {
   sound.pop();
   startRide();
 });
+for (const crayon of document.querySelectorAll('.crayon')) {
+  crayon.addEventListener('click', () => {
+    pad.color = Number(crayon.dataset.c);
+    for (const c of document.querySelectorAll('.crayon')) c.classList.toggle('selected', c === crayon);
+    sound.pop();
+  });
+}
+tap('look', () => {
+  sound.pop();
+  $('look').classList.toggle('outside', ride.toggleMode() === 'outside');
+});
+// Tap anywhere on the ride for hands up.
+$('view').addEventListener('pointerdown', () => ride.handsUp());
+
 tap('undo', () => (pad.undo() ? sound.pop() : null));
 tap('clear', () => (pad.clear() ? sound.trash() : null));
 tap('home', () => {

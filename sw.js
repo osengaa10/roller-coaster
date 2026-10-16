@@ -1,5 +1,5 @@
 // Network first so updates show up right away; fall back to the cache when offline.
-const CACHE = 'coaster-doodle-v1';
+const CACHE = 'coaster-doodle-v2';
 const SHELL = [
   './',
   'index.html',
@@ -8,6 +8,9 @@ const SHELL = [
   'js/main.js',
   'js/draw.js',
   'js/ride.js',
+  'js/scenery.js',
+  'js/characters.js',
+  'js/effects.js',
   'js/track.js',
   'js/sound.js',
   'js/storage.js',

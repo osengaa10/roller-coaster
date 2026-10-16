@@ -177,3 +177,56 @@ export function cheer() {
   // Clappy crowd
   for (let i = 0; i < 30; i++) noise(t + 0.4 + Math.random() * 1.4, 0.04, { freq: 1500 + Math.random() * 1500, q: 2, vol: 0.25 });
 }
+
+// Star collected: a bright ding that climbs a little with every star in a row.
+export function ding(n = 1) {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  const f = 880 * Math.pow(2, (Math.min(n, 12) % 13) / 12);
+  tone(f, t, 0.35, { vol: 0.22 });
+  tone(f * 2, t + 0.04, 0.25, { type: 'triangle', vol: 0.08 });
+}
+
+// Hands up: a quick happy "yay!"
+export function yay() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  tone(520, t, 0.18, { type: 'triangle', vol: 0.18, to: 880 });
+  tone(700, t + 0.16, 0.3, { type: 'triangle', vol: 0.18, to: 1150 });
+}
+
+// Into a tunnel: a filtered rush of air.
+export function whoosh() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer;
+  const f = ctx.createBiquadFilter();
+  f.type = 'bandpass';
+  f.Q.value = 1.2;
+  f.frequency.setValueAtTime(300, t);
+  f.frequency.exponentialRampToValueAtTime(2200, t + 0.35);
+  f.frequency.exponentialRampToValueAtTime(250, t + 1.0);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.6, t + 0.25);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+  src.connect(f).connect(g).connect(master);
+  src.start(t, Math.random());
+  src.stop(t + 1.2);
+}
+
+export function splash() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  noise(t, 1.1, { type: 'lowpass', freq: 1400, q: 0.5, vol: 0.7 });
+  noise(t + 0.05, 0.6, { freq: 3500, q: 0.8, vol: 0.25 });
+  for (let i = 0; i < 10; i++) tone(1200 + Math.random() * 1800, t + 0.2 + Math.random() * 0.9, 0.08, { vol: 0.06 });
+}
+
+export function firework() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  noise(t, 0.5, { type: 'lowpass', freq: 220, q: 0.7, vol: 0.9 });
+  for (let i = 0; i < 14; i++) noise(t + 0.15 + Math.random() * 0.8, 0.03, { freq: 2500 + Math.random() * 3000, q: 3, vol: 0.18 });
+}

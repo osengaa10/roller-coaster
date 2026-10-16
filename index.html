@@ -21,6 +21,34 @@
     <section id="draw" class="screen active">
       <canvas id="pad"></canvas>
       <div id="hand" aria-hidden="true">👆</div>
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+          <linearGradient id="rainbow" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#ff4d6d" /><stop offset=".25" stop-color="#ffd23f" /><stop offset=".5" stop-color="#3bb273" />
+            <stop offset=".75" stop-color="#3a86ff" /><stop offset="1" stop-color="#9b5de5" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div id="crayons">
+        <button class="crayon selected" data-c="0" aria-label="Crayon 1">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="#e63946" /><rect x="8" y="24" width="24" height="64" rx="5" fill="#e63946" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+        <button class="crayon" data-c="1" aria-label="Crayon 2">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="#ff8c42" /><rect x="8" y="24" width="24" height="64" rx="5" fill="#ff8c42" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+        <button class="crayon" data-c="2" aria-label="Crayon 3">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="#3bb273" /><rect x="8" y="24" width="24" height="64" rx="5" fill="#3bb273" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+        <button class="crayon" data-c="3" aria-label="Crayon 4">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="#3a86ff" /><rect x="8" y="24" width="24" height="64" rx="5" fill="#3a86ff" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+        <button class="crayon" data-c="4" aria-label="Crayon 5">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="#9b5de5" /><rect x="8" y="24" width="24" height="64" rx="5" fill="#9b5de5" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+        <button class="crayon" data-c="5" aria-label="Crayon 6">
+          <svg viewBox="0 0 40 90"><path d="M10 26 20 2l10 24z" fill="url(#rainbow)" /><rect x="8" y="24" width="24" height="64" rx="5" fill="url(#rainbow)" /><rect x="8" y="40" width="24" height="5" fill="rgba(0,0,0,.18)" /><rect x="8" y="72" width="24" height="5" fill="rgba(0,0,0,.18)" /></svg>
+        </button>
+      </div>
 
       <div class="corner top-right">
         <button id="undo" class="btn blue" aria-label="Undo">
@@ -42,9 +70,15 @@
         <button id="home" class="btn purple" aria-label="Back to drawing">
           <svg viewBox="0 0 48 48"><path d="M6 24 24 8l18 16M11 20v20h26V20" /><path class="fill" d="M20 40V29h8v11z" /></svg>
         </button>
+        <button id="look" class="btn blue" aria-label="Watch from outside">
+          <svg class="eye" viewBox="0 0 48 48"><path d="M4 24s8-13 20-13 20 13 20 13-8 13-20 13S4 24 4 24z" /><circle class="fill" cx="24" cy="24" r="6" /></svg>
+          <svg class="seat" viewBox="0 0 48 48"><path d="M8 30h32l-4 10H12zM14 30V12a4 4 0 0 1 4-4h12a4 4 0 0 1 4 4v18" /></svg>
+        </button>
       </div>
+      <div id="hud" aria-hidden="true"><span class="star">⭐</span><span id="hud-count">0</span></div>
       <div id="finish">
         <div id="confetti"></div>
+        <div id="tally" aria-hidden="true"></div>
         <div class="choices">
           <button id="again" class="btn green big" aria-label="Ride again">
             <svg viewBox="0 0 48 48"><path d="M38 24a14 14 0 1 1-4.1-9.9" /><path class="fill" d="M40 6v14H26z" /></svg>
