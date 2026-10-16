@@ -29,15 +29,17 @@ export class Effects {
     this.list.push(new Burst(this.scene, opts));
   }
 
-  sparkle(at) {
+  // carry: the train's velocity, so the burst opens up in front of him instead of in his face.
+  sparkle(at, carry) {
     this.burst({
       at,
       count: 40,
       colors: ['#ffd23f', '#fff4b0', '#ffffff'],
-      speed: [2, 6],
+      velocity: () => new THREE.Vector3().randomDirection().multiplyScalar(3 + Math.random() * 3).add(carry),
       gravity: 0,
-      life: 0.7,
-      size: 0.25,
+      drag: 0,
+      life: 0.6,
+      size: 0.14,
     });
   }
 
@@ -94,11 +96,12 @@ function getDot() {
 }
 
 class Burst {
-  constructor(scene, { at, count, colors, speed = [8, 14], velocity = null, gravity = 4, life = 1.6, size = 1 }) {
+  constructor(scene, { at, count, colors, speed = [8, 14], velocity = null, gravity = 4, drag = 0.6, life = 1.6, size = 1 }) {
     this.scene = scene;
     this.life = life;
     this.age = 0;
     this.gravity = gravity;
+    this.drag = drag;
     const pos = new Float32Array(count * 3);
     const col = new Float32Array(count * 3);
     this.vel = [];
@@ -135,7 +138,7 @@ class Burst {
     for (let i = 0; i < this.vel.length; i++) {
       const v = this.vel[i];
       v.y -= this.gravity * dt;
-      v.multiplyScalar(1 - dt * 0.6);
+      v.multiplyScalar(1 - dt * this.drag);
       pos.setXYZ(i, pos.getX(i) + v.x * dt, pos.getY(i) + v.y * dt, pos.getZ(i) + v.z * dt);
     }
     pos.needsUpdate = true;

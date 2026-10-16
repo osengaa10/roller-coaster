@@ -19,18 +19,24 @@ function part(geo, color, [x, y, z], [sx, sy, sz] = [1, 1, 1]) {
 }
 const ball = (color, p, r, s = [1, 1, 1]) => part(SPHERE, color, p, [r * s[0], r * s[1], r * s[2]]);
 
-// The car you sit in, seen from the front seat (child of the camera).
+// The car you sit in, seen from the front seat (child of the camera). It's a two-seater:
+// he sits on the left (camera), his friend sits on the right with its legs hidden in the car.
+export const FRIEND_SEAT = { x: 1.25, y: -1.32, z: -1.55 };
 export function makeSeatCar() {
   const car = new THREE.Group();
-  car.add(part(BOX, '#ee4266', [0, -1.4, -1.5], [1.8, 0.7, 2.2]));
-  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 1.8, 20, 1, false, 0, Math.PI), mat('#ffd23f'));
+  car.add(part(BOX, '#ee4266', [0.6, -1.4, -1.5], [3.1, 0.7, 2.2]));
+  // A darker seat well under each rider so the inside of the car reads as "inside".
+  car.add(part(BOX, '#b8304f', [0, -1.04, -1.45], [1.3, 0.02, 1.5]));
+  car.add(part(BOX, '#b8304f', [FRIEND_SEAT.x, -1.04, -1.45], [1.3, 0.02, 1.5]));
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.1, 20, 1, false, 0, Math.PI), mat('#ffd23f'));
   nose.rotation.set(0, 0, Math.PI / 2);
-  nose.position.set(0, -1.05, -2.6);
+  nose.position.set(0.6, -1.05, -2.6);
   nose.scale.set(0.5, 1, 1);
   const bar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.05, 8, 24, Math.PI), mat('#3bceac'));
   bar.position.set(0, -1.0, -0.8);
   bar.rotation.set(-0.3, 0, 0);
-  car.add(nose, bar, ball('#ffffff', [0.55, -0.87, -2.62], 0.14), ball('#ffffff', [-0.55, -0.87, -2.62], 0.14));
+  car.add(nose, bar);
+  car.add(ball('#ffffff', [-0.45, -0.87, -2.62], 0.14), ball('#ffffff', [1.65, -0.87, -2.62], 0.14));
   return car;
 }
 

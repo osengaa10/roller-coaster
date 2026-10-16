@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { V_MAX } from './track.js';
 import * as sound from './sound.js';
 import { makeStaticWorld, makeTrackWorld, disposeTree } from './scenery.js';
-import { makeSeatCar, makeTrainCar, makeRider, makeHands, FRIENDS } from './characters.js';
+import { makeSeatCar, makeTrainCar, makeRider, makeHands, FRIENDS, FRIEND_SEAT } from './characters.js';
 import { Effects } from './effects.js';
 
 const EYE = 1.3; // seat height above the track
@@ -137,7 +137,7 @@ export class Ride {
     f.removeFromParent();
     if (seat) {
       // Sitting just ahead and to the right, turned to look at him.
-      f.position.set(1.25, -1.15, -2.3);
+      f.position.set(FRIEND_SEAT.x, FRIEND_SEAT.y, FRIEND_SEAT.z);
       f.rotation.set(0, -0.6, 0);
       f.scale.setScalar(0.75);
       this.camera.add(f);
@@ -217,10 +217,10 @@ export class Ride {
       sound.whee();
     }
     const stars = this.world.stars;
-    while (this.nextStar < stars.length && this.s >= stars[this.nextStar].s - 1.5) {
+    while (this.nextStar < stars.length && this.s >= stars[this.nextStar].s - 3) {
       const star = stars[this.nextStar++];
       star.holder.visible = false;
-      this.effects.sparkle(star.at);
+      this.effects.sparkle(star.at, this.vec(tr.tan, star.s).multiplyScalar(this.v));
       this.starCount++;
       sound.ding(this.starCount);
       this.onStar(this.starCount);
