@@ -19,37 +19,128 @@ function part(geo, color, [x, y, z], [sx, sy, sz] = [1, 1, 1]) {
 }
 const ball = (color, p, r, s = [1, 1, 1]) => part(SPHERE, color, p, [r * s[0], r * s[1], r * s[2]]);
 
-// The car you sit in, seen from the front seat (child of the camera). It's a two-seater:
-// he sits on the left (camera), his friend sits on the right with its legs hidden in the car.
-export const FRIEND_SEAT = { x: 1.25, y: -1.32, z: -1.55 };
-export function makeSeatCar() {
+// Painted metal and chrome for the train.
+const paints = new Map();
+const paint = (color, shininess = 80) => {
+  const key = color + shininess;
+  if (!paints.has(key)) paints.set(key, new THREE.MeshPhongMaterial({ color, shininess, specular: '#666666' }));
+  return paints.get(key);
+};
+const CHROME = '#d5dbe2';
+
+// Side profile of a car body (z forward, y up), extruded across the car's width.
+// The dip in the middle is where riders sit; their legs are hidden inside the body.
+function bodyGeometry(width) {
+  const s = new THREE.Shape();
+  s.moveTo(-1.15, 0.5);
+  s.lineTo(0.95, 0.5);
+  s.quadraticCurveTo(1.32, 0.5, 1.32, 0.82);
+  s.quadraticCurveTo(1.32, 1.1, 0.95, 1.1);
+  s.lineTo(0.6, 1.1);
+  s.quadraticCurveTo(0.42, 1.1, 0.4, 0.85);
+  s.lineTo(-0.75, 0.85);
+  s.lineTo(-0.8, 1.0);
+  s.quadraticCurveTo(-0.85, 1.12, -1.0, 1.12);
+  s.lineTo(-1.05, 1.12);
+  s.quadraticCurveTo(-1.15, 1.12, -1.15, 1.0);
+  s.closePath();
+  const bevel = 0.06;
+  const geo = new THREE.ExtrudeGeometry(s, {
+    depth: width - bevel * 2,
+    bevelEnabled: true,
+    bevelSize: bevel,
+    bevelThickness: bevel,
+    bevelSegments: 2,
+    curveSegments: 10,
+  });
+  geo.rotateY(-Math.PI / 2); // profile x -> forward (z), extrusion -> across (x)
+  geo.translate(width / 2 - bevel, 0, 0);
+  return geo;
+}
+
+function smallStar() {
+  const shape = new THREE.Shape();
+  for (let k = 0; k < 10; k++) {
+    const r = k % 2 ? 0.07 : 0.16;
+    const a = Math.PI / 2 + (k / 10) * Math.PI * 2;
+    if (k === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  return new THREE.ExtrudeGeometry(shape, { depth: 0.04, bevelEnabled: false });
+}
+
+// A coaster car. Local +z is forward, +y is up, the origin sits on the track between the rails.
+// seats: x of each seat; the front car gets headlights, a bumper and a star badge.
+export function makeTrainCar(color, front = false, { width = 1.9, seats = [0.45, -0.45], seatBacks = true, lapBars = seats, wheels = true } = {}) {
   const car = new THREE.Group();
-  car.add(part(BOX, '#ee4266', [0.6, -1.4, -1.5], [3.1, 0.7, 2.2]));
-  // A darker seat well under each rider so the inside of the car reads as "inside".
-  car.add(part(BOX, '#b8304f', [0, -1.04, -1.45], [1.3, 0.02, 1.5]));
-  car.add(part(BOX, '#b8304f', [FRIEND_SEAT.x, -1.04, -1.45], [1.3, 0.02, 1.5]));
-  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.1, 20, 1, false, 0, Math.PI), mat('#ffd23f'));
-  nose.rotation.set(0, 0, Math.PI / 2);
-  nose.position.set(0.6, -1.05, -2.6);
-  nose.scale.set(0.5, 1, 1);
-  const bar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.05, 8, 24, Math.PI), mat('#3bceac'));
-  bar.position.set(0, -1.0, -0.8);
-  bar.rotation.set(-0.3, 0, 0);
-  car.add(nose, bar);
-  car.add(ball('#ffffff', [-0.45, -0.87, -2.62], 0.14), ball('#ffffff', [1.65, -0.87, -2.62], 0.14));
+  car.add(new THREE.Mesh(bodyGeometry(width), paint(color)));
+  // Racing stripe down each side.
+  for (const sx of [-1, 1]) car.add(part(BOX, '#ffffff', [sx * (width / 2 + 0.01), 0.68, 0.05], [0.03, 0.1, 2.1]));
+  // Chrome trim along the cockpit edge.
+  car.add(part(CYL, CHROME, [0, 1.1, 0.6], [0.04, width - 0.1, 0.04]).rotateZ(Math.PI / 2));
+
+  for (const x of seats) {
+    if (seatBacks) {
+      const back = part(BOX, '#2b2d42', [x, 1.12, -0.66], [0.72, 0.62, 0.14]);
+      back.rotation.x = -0.12;
+      car.add(back, ball('#2b2d42', [x, 1.5, -0.71], 1, [0.3, 0.17, 0.09]));
+    }
+    car.add(part(BOX, '#3d405b', [x, 0.86, -0.25], [0.72, 0.05, 0.85]));
+  }
+  for (const x of lapBars) {
+    const bar = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.06, 8, 20, Math.PI), paint('#ffd23f'));
+    // Padded bar standing up in front of the rider, leaning back toward them.
+    bar.position.set(x, 0.86, 0.15);
+    bar.rotation.set(-0.35, 0, 0);
+    car.add(bar);
+  }
+
+  if (wheels) {
+    // Chassis, then a wheel assembly hugging each rail at front and back:
+    // a road wheel on top, an up-stop wheel underneath and a guide wheel at the side.
+    car.add(part(BOX, '#3d3d45', [0, 0.44, 0], [1.5, 0.14, 2.1]));
+    for (const z of [-0.8, 0.8]) {
+      for (const sx of [-1, 1]) {
+        const x = sx * 0.6;
+        car.add(part(BOX, '#55555f', [x + sx * 0.3, 0.05, z], [0.1, 0.75, 0.42]));
+        car.add(part(BOX, '#55555f', [x + sx * 0.15, 0.42, z], [0.35, 0.08, 0.42]));
+        for (const [y, r] of [[0.25, 0.15], [-0.24, 0.1]]) {
+          const wheel = part(CYL, '#1f1f1f', [x, y, z], [r, 0.1, r]);
+          wheel.rotation.z = Math.PI / 2;
+          car.add(wheel);
+        }
+        car.add(part(CYL, '#1f1f1f', [x + sx * 0.2, 0, z], [0.1, 0.1, 0.1]));
+      }
+    }
+    // Tow bar to the car behind.
+    const hitch = part(CYL, '#3d3d45', [0, 0.45, -1.3], [0.06, 0.4, 0.06]);
+    hitch.rotation.x = Math.PI / 2;
+    car.add(hitch);
+  }
+
+  if (front) {
+    for (const sx of [-1, 1]) {
+      const lamp = new THREE.Mesh(SPHERE, new THREE.MeshPhongMaterial({ color: '#fffbe0', emissive: '#aa9a55', shininess: 100 }));
+      lamp.position.set(sx * (width / 2 - 0.35), 0.86, 1.3);
+      lamp.scale.set(0.13, 0.13, 0.06);
+      car.add(lamp);
+    }
+    const bumper = part(CYL, CHROME, [0, 0.56, 1.33], [0.06, width - 0.3, 0.06]);
+    bumper.rotation.z = Math.PI / 2;
+    const star = new THREE.Mesh(smallStar(), paint('#ffd23f'));
+    star.position.set(0, 0.95, 1.29);
+    car.add(bumper, star);
+  }
   return car;
 }
 
-// A train car for the outside view. Local +z is forward, +y is up.
-export function makeTrainCar(color, front = false) {
-  const car = new THREE.Group();
-  car.add(part(BOX, color, [0, 0.35, 0], [1.9, 0.7, 2.3]));
-  car.add(part(BOX, '#333333', [0, 0.75, -0.95], [1.9, 0.6, 0.25])); // seat back
-  for (const x of [-0.75, 0.75]) for (const z of [-0.8, 0.8]) car.add(part(CYL, '#333333', [x, 0, z], [0.22, 0.2, 0.22]));
-  if (front) {
-    const nose = part(SPHERE, '#ffd23f', [0, 0.4, 1.15], [0.95, 0.4, 0.5]);
-    car.add(nose);
-  }
+// The car you sit in, seen from the front seat (child of the camera). It's a wide two-seater
+// set a little low so the cowl doesn't block the view; his friend sits in the right seat.
+export const FRIEND_SEAT = { x: 1.25, y: -1.32, z: -1.4 };
+export function makeSeatCar() {
+  const car = makeTrainCar('#ee4266', true, { width: 3.1, seats: [0.55, -0.7], seatBacks: false, lapBars: [0.55], wheels: false });
+  car.rotation.y = Math.PI; // car forward (+z) -> camera forward (-z)
+  car.position.set(0.55, -1.9, -1.5);
   return car;
 }
 

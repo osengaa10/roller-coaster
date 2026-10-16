@@ -1,11 +1,23 @@
 // The 3D world: sky, ground, trees, and everything built from a drawn track.
 import * as THREE from 'three';
-import { supportSpots, starSpots, splashSpot, tunnelRuns } from './track.js';
+import { supportSpots, supportLegs, starSpots, splashSpot, tunnelRuns } from './track.js';
 
 const RAIL_GAP = 0.6; // half distance between rails
+const SPINE_DROP = 0.6; // spine center below the rails
 
 // Fresh (uncached) materials, so a track's world can be disposed in one go.
 const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
+// Painted steel: picks up a highlight from the sun.
+const shiny = (color, extra = {}) => new THREE.MeshPhongMaterial({ color, shininess: 70, specular: '#4d4d4d', ...extra });
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+// Matrix for a unit cylinder (radius 1, height 1, centered) stretched from a to b.
+function beam(m, a, b, r) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const len = dir.length();
+  const q = new THREE.Quaternion().setFromUnitVectors(Y_AXIS, dir.divideScalar(len || 1));
+  return m.compose(a.clone().add(b).multiplyScalar(0.5), q, new THREE.Vector3(r, len, r));
+}
 
 export function makeStaticWorld() {
   const g = new THREE.Group();
@@ -57,37 +69,95 @@ export function makeTrackWorld(tr, eye) {
   const T = (i) => new THREE.Vector3(tr.tan[i * 3], tr.tan[i * 3 + 1], tr.tan[i * 3 + 2]);
   const side = (i) => new THREE.Vector3().crossVectors(U(i), T(i)).normalize();
   const paint = (i) => [tr.rgb[i * 3], tr.rgb[i * 3 + 1], tr.rgb[i * 3 + 2]];
-  const pastel = (i) => paint(i).map((v) => v * 0.6 + 0.4);
   const frame = (i) => new THREE.Matrix4().makeBasis(side(i), U(i), T(i));
 
-  // Rails in his crayon colors, and a fat lighter spine underneath.
-  const painted = mat('#ffffff', { vertexColors: true });
-  g.add(new THREE.Mesh(tube(all, (i) => P(i).addScaledVector(side(i), RAIL_GAP), U, side, 0.12, { colorAt: paint }), painted));
-  g.add(new THREE.Mesh(tube(all, (i) => P(i).addScaledVector(side(i), -RAIL_GAP), U, side, 0.12, { colorAt: paint }), painted));
-  g.add(new THREE.Mesh(tube(all, (i) => P(i).addScaledVector(U(i), -0.55), U, side, 0.28, { colorAt: pastel }), painted));
-
-  // Ties
-  const tieEvery = 2;
-  const ties = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 0.14, 0.35), mat('#7a4a2a'), Math.ceil(n / tieEvery));
-  const m = new THREE.Matrix4();
-  let t = 0;
-  for (let i = 0; i < n; i += tieEvery) {
-    const u = U(i);
-    m.makeBasis(side(i), u, T(i)).setPosition(P(i).addScaledVector(u, -0.18));
-    ties.setMatrixAt(t++, m);
+  // Steel track: two rails and a round spine, painted in his crayon colors.
+  const steel = shiny('#ffffff', { vertexColors: true });
+  const railPaint = (i) => paint(i).map((v) => v * 0.8 + 0.2);
+  for (const s of [-1, 1]) {
+    const rail = tube(all, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 10, colorAt: railPaint });
+    g.add(new THREE.Mesh(rail, steel));
   }
-  ties.count = t;
-  g.add(ties);
+  g.add(new THREE.Mesh(tube(all, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 12, colorAt: paint }), steel));
 
-  // Support poles from the spine down to the grass.
-  const poles = supportSpots(tr);
-  if (poles.length) {
-    const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.25, 1, 8), mat('#dfe6f2'), poles.length);
-    poles.forEach((b, k) => {
-      m.makeScale(1, b.y, 1).setPosition(b.x, b.y / 2, b.z);
-      pole.setMatrixAt(k, m);
+  // Cross-ties every meter: a crossbar under the rails, braced down to the spine.
+  const m = new THREE.Matrix4();
+  const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8);
+  const unitBox = new THREE.BoxGeometry(1, 1, 1);
+  const tieIds = all.filter((i) => i % 2 === 0);
+  const bars = new THREE.InstancedMesh(unitBox, shiny('#ffffff'), tieIds.length);
+  const braces = new THREE.InstancedMesh(unitCyl, shiny('#ffffff'), tieIds.length * 2);
+  const col = new THREE.Color();
+  tieIds.forEach((i, k) => {
+    const u = U(i);
+    const sd = side(i);
+    const p = P(i);
+    col.fromArray(paint(i).map((v) => v * 0.72));
+    m.makeBasis(sd, u, T(i)).scale(new THREE.Vector3(1.45, 0.1, 0.16)).setPosition(p.clone().addScaledVector(u, -0.15));
+    bars.setMatrixAt(k, m);
+    bars.setColorAt(k, col);
+    const spine = p.clone().addScaledVector(u, -SPINE_DROP);
+    [-1, 1].forEach((s, j) => {
+      braces.setMatrixAt(k * 2 + j, beam(m, spine, p.clone().addScaledVector(sd, s * RAIL_GAP).addScaledVector(u, -0.15), 0.055));
+      braces.setColorAt(k * 2 + j, col);
     });
-    g.add(pole);
+  });
+  g.add(bars, braces);
+
+  // Lift chain up the middle of every climb.
+  const liftIds = all.filter((i) => tr.lift[i]);
+  if (liftIds.length) {
+    const links = new THREE.InstancedMesh(unitBox, shiny('#3a3a3a', { shininess: 30 }), liftIds.length * 2);
+    liftIds.forEach((i, k) => {
+      for (const j of [0, 1]) {
+        const at = P(i).addScaledVector(U(i), -0.05).addScaledVector(T(i), j * 0.25 - 0.12);
+        const w = j ? 0.07 : 0.12;
+        m.makeBasis(side(i), U(i), T(i)).scale(new THREE.Vector3(w, 0.06, 0.2)).setPosition(at);
+        links.setMatrixAt(k * 2 + j, m);
+      }
+    });
+    g.add(links);
+  }
+
+  // Supports: concrete footing, steel column(s), and a saddle under the spine.
+  // Tall ones are A-frames with cross braces (their legs were checked against the track).
+  const columns = [];
+  const footings = [];
+  const saddles = [];
+  for (const sp of supportSpots(tr)) {
+    const top = new THREE.Vector3(sp.x, sp.y - 0.3, sp.z);
+    if (sp.spread > 0) {
+      const legs = supportLegs(sp).map(([a, b]) => [new THREE.Vector3(b.x, 0.4, b.z), new THREE.Vector3(a.x, a.y - 0.3, a.z)]);
+      for (const [bottom, legTop] of legs) {
+        columns.push([bottom, legTop, 0.2]);
+        footings.push(bottom);
+      }
+      for (let y = 6; y < sp.y - 3; y += Math.max(7, sp.y / 8)) {
+        const f = y / (sp.y - 0.3);
+        const [l, r] = legs.map(([b, t]) => b.clone().lerp(t, f));
+        columns.push([l, r, 0.11]);
+      }
+    } else {
+      const bottom = new THREE.Vector3(sp.x, 0.4, sp.z);
+      columns.push([bottom, top, 0.26]);
+      footings.push(bottom);
+    }
+    saddles.push([top, sp.dir, sp.spread > 0 ? 1.1 : 0.8]);
+  }
+  if (columns.length) {
+    const steelGrey = shiny('#e3e8ef');
+    const cols = new THREE.InstancedMesh(unitCyl, steelGrey, columns.length);
+    columns.forEach(([a, b, r], k) => cols.setMatrixAt(k, beam(m, a, b, r)));
+    const feet = new THREE.InstancedMesh(unitBox, mat('#c4c4c4'), footings.length);
+    footings.forEach((f, k) => feet.setMatrixAt(k, m.makeScale(1.3, 0.8, 1.3).setPosition(f.x, 0.3, f.z)));
+    const caps = new THREE.InstancedMesh(unitBox, steelGrey, saddles.length);
+    saddles.forEach(([t, dir, w], k) => {
+      const across = new THREE.Vector3(dir.x, 0, dir.z);
+      const along = new THREE.Vector3().crossVectors(across, Y_AXIS);
+      m.makeBasis(across, Y_AXIS, along).scale(new THREE.Vector3(w, 0.3, 0.5)).setPosition(t);
+      caps.setMatrixAt(k, m);
+    });
+    g.add(cols, feet, caps);
   }
 
   // Station: platform and a bright roof high enough to see out from under.
@@ -253,5 +323,55 @@ export function mulberry32(seed) {
     let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Outer space, for very tall coasters: stars that fade in with height, plus planets far away.
+// The planets use fog, so they stay hidden in the blue until the fog thins out up high.
+export function makeSpace() {
+  const g = new THREE.Group();
+  const rand = mulberry32(42);
+  const count = 900;
+  const pos = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const v = new THREE.Vector3(rand() * 2 - 1, rand() * 1.1 - 0.1, rand() * 2 - 1).normalize().multiplyScalar(1400);
+    pos.set([v.x, v.y, v.z], i * 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const stars = new THREE.Points(
+    geo,
+    new THREE.PointsMaterial({ color: '#ffffff', size: 2.5, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false }),
+  );
+  stars.frustumCulled = false;
+  g.add(stars);
+
+  const saturn = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 20), mat('#e8c27a', { emissive: '#4a3a1a' }));
+  saturn.position.set(900, 650, -900);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(100, 160, 64), mat('#d9b77a', { side: THREE.DoubleSide, emissive: '#3a2e14' }));
+  ring.position.copy(saturn.position);
+  ring.rotation.set(-1.2, 0.3, 0);
+  const moon = new THREE.Mesh(new THREE.SphereGeometry(45, 28, 18), mat('#e9e9ee', { emissive: '#444450' }));
+  moon.position.set(-500, 520, -700);
+  const mars = new THREE.Mesh(new THREE.SphereGeometry(32, 24, 16), mat('#d9623b', { emissive: '#4a1a0a' }));
+  mars.position.set(300, 900, 800);
+  g.add(saturn, ring, moon, mars);
+
+  const planets = [
+    [saturn, [700, 520, -500]],
+    [ring, [700, 520, -500]],
+    [moon, [420, 680, 420]],
+    [mars, [1000, 860, 120]],
+  ];
+  return {
+    group: g,
+    // Hang the planets ahead of the coaster and up high, where he'll see them on the climb.
+    place(centerX) {
+      for (const [mesh, [x, y, z]] of planets) mesh.position.set(centerX + x, y, z);
+    },
+    update(cameraPos, t) {
+      stars.position.copy(cameraPos);
+      stars.material.opacity = t;
+    },
   };
 }

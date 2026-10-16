@@ -6,6 +6,8 @@ A roller coaster game for little kids (built for a 4-year-old on an iPad).
 2. Tap the big green **▶** button.
 3. **Ride it** in first person with an animal friend (a different one each time), then ride again or draw a new one.
 
+**Hold the line against the right or top edge** and the view zooms out while the track keeps going that way, so the whole coaster always fits. Keep going up and the sky turns into outer space, with stars, the moon and planets, and the ride climbs up there too.
+
 Things that happen on their own during the ride:
 - **Stars** float along the track. Fly through them to collect them, then count them at the end.
 - **Tunnels** appear where the track skims along the ground.

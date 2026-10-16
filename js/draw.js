@@ -4,9 +4,39 @@ import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
 const MAX_HISTORY = 60;
-const MIN_ZOOM = 0.35; // two-finger pinch can zoom out to here (1 = the sky is one track-height tall)
-const TOP_Y = 1.6; // highest point he can draw when zoomed out (normalized)
+const MIN_ZOOM = 0.1; // how far the view can zoom out (1 = the sky is one track-height tall)
+const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 10 = 400 m, well into space)
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
+const EDGE_ZOOM = 0.55; // per second: holding a line against the right/top edge zooms out this fast
+
+// Sky color by height (normalized units): blue near the ground, dark space way up high.
+const SKY_STOPS = [
+  [0, [201, 236, 255]],
+  [1, [79, 179, 255]],
+  [3, [42, 91, 215]],
+  [4.5, [20, 26, 74]],
+  [6, [5, 6, 26]],
+];
+function skyAt(alt) {
+  let i = 0;
+  while (i < SKY_STOPS.length - 2 && alt > SKY_STOPS[i + 1][0]) i++;
+  const [a0, c0] = SKY_STOPS[i];
+  const [a1, c1] = SKY_STOPS[i + 1];
+  const f = Math.max(0, Math.min(1, (alt - a0) / (a1 - a0)));
+  return `rgb(${c0.map((v, k) => Math.round(v + (c1[k] - v) * f)).join(',')})`;
+}
+
+// Stars live up in the sky (track coordinates), so they come into view as he zooms out.
+const STARS = (() => {
+  let seed = 9;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  return Array.from({ length: 500 }, () => ({ x: rand() * 40, y: 3.5 + rand() * 7, r: 0.6 + rand() * 1.4 }));
+})();
+const PLANETS = [
+  { x: 1.1, y: 5.2, r: 0.2, color: '#e9e9ee', craters: true },
+  { x: 2.7, y: 7.4, r: 0.3, color: '#e8c27a', ring: '#d9b77a' },
+  { x: 4.4, y: 9.2, r: 0.16, color: '#d9623b' },
+];
 
 export class DrawPad {
   constructor(canvas, hand, { strokes = [], onChange = () => {} } = {}) {
@@ -34,8 +64,12 @@ export class DrawPad {
     canvas.addEventListener('pointerup', (e) => this.up(e));
     canvas.addEventListener('pointercancel', (e) => this.up(e));
 
+    let last = performance.now();
     const tick = (t) => {
+      const dt = Math.max(0, Math.min(0.05, (t - last) / 1000));
+      last = t;
       if (this.active) {
+        this.edgeZoom(dt);
         if (this.dirty) this.render();
         this.animateHand(t);
       }
@@ -70,7 +104,7 @@ export class DrawPad {
 
   // Decorations (line widths, the station, the sun) scale with the screen and the zoom.
   get k() {
-    return Math.max(0.3, Math.min(1.1, this.unit / REF_UNIT));
+    return Math.min(1.1, this.unit / REF_UNIT);
   }
 
   setView(zoom, panX) {
@@ -155,6 +189,23 @@ export class DrawPad {
     this.onChange();
   }
 
+  // Holding a line against the right or top edge zooms out. The finger stays put while the world
+  // shrinks under it, so the track keeps growing that way and the whole coaster stays in view.
+  edgeZoom(dt) {
+    if (this.pointerId === null || !this.lastScreen || this.zoom <= MIN_ZOOM) return;
+    const band = Math.max(28, Math.min(this.w, this.h) * 0.07);
+    const { x, y } = this.lastScreen;
+    if (x < this.w - band && y > band) return;
+    this.setView(this.zoom * Math.exp(-EDGE_ZOOM * dt), this.panX);
+    const stroke = this.strokes[this.strokes.length - 1].p;
+    const p = this.toTrack(x, y);
+    const prev = stroke[stroke.length - 1];
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 0.004) {
+      stroke.push(p);
+      sound.drawMove(p.y);
+    }
+  }
+
   // Two fingers: pinch to zoom out/in, slide to move along the track.
   startPinch() {
     if (this.pointerId !== null) {
@@ -212,12 +263,15 @@ export class DrawPad {
     this.dirty = false;
     const { ctx, w, h, groundY } = this;
 
-    // Sky
-    const sky = ctx.createLinearGradient(0, 0, 0, groundY);
-    sky.addColorStop(0, '#4fb3ff');
-    sky.addColorStop(1, '#c9ecff');
+    // Sky, colored by height: zoomed out far enough, the top of the screen is outer space.
+    const topAlt = groundY / this.unit;
+    const sky = ctx.createLinearGradient(0, groundY, 0, 0);
+    for (const [alt] of SKY_STOPS) if (alt < topAlt) sky.addColorStop(alt / topAlt, skyAt(alt));
+    sky.addColorStop(1, skyAt(topAlt));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, groundY);
+    const space = Math.max(0, Math.min(1, (topAlt - 3) / 3)); // 0 = all blue, 1 = deep space on screen
+    if (topAlt > 3.5) this.drawSpace();
 
     // Sun and clouds are scenery: sized to the screen, not the zoom.
     const z = Math.max(0.45, Math.min(1, Math.min(w, h) / 834));
@@ -238,8 +292,8 @@ export class DrawPad {
     ctx.arc(sx, sy, 36 * z, 0, Math.PI * 2);
     ctx.fill();
 
-    // Clouds
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    // Clouds belong low in the sky, so they fade away as space comes into view.
+    ctx.fillStyle = `rgba(255,255,255,${0.9 * (1 - space)})`;
     for (const [cx, cy, s] of [[0.18, 0.22, 1], [0.78, 0.3, 1.3], [0.35, 0.45, 0.8]]) {
       cloud(ctx, cx * w, cy * h, s * z);
     }
@@ -254,6 +308,46 @@ export class DrawPad {
     this.drawStation();
   }
 
+  drawSpace() {
+    const { ctx } = this;
+    for (const s of STARS) {
+      const p = this.toScreen(s);
+      if (p.x < -4 || p.x > this.w + 4 || p.y < -4) continue;
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - 3.5) / 2)})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const pl of PLANETS) {
+      const p = this.toScreen(pl);
+      const r = pl.r * this.unit;
+      if (pl.ring) {
+        ctx.strokeStyle = pl.ring;
+        ctx.lineWidth = r * 0.22;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, r * 1.8, r * 0.5, -0.3, Math.PI * 0.9, Math.PI * 2.1); // back half of the ring
+        ctx.stroke();
+      }
+      ctx.fillStyle = pl.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (pl.ring) {
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, r * 1.8, r * 0.5, -0.3, Math.PI * 0.1, Math.PI * 0.9); // front half
+        ctx.stroke();
+      }
+      if (pl.craters) {
+        ctx.fillStyle = 'rgba(0,0,0,0.12)';
+        for (const [cx, cy, cr] of [[-0.35, -0.2, 0.22], [0.3, 0.25, 0.18], [0.1, -0.45, 0.12]]) {
+          ctx.beginPath();
+          ctx.arc(p.x + cx * r, p.y + cy * r, cr * r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
   drawTrack() {
     const { ctx, groundY, k } = this;
     const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c }));
@@ -265,7 +359,7 @@ export class DrawPad {
     let acc = 0;
     for (let i = 1; i < pts.length; i++) {
       acc += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      if (acc > 34 * k && groundY - pts[i].y > 20 * k) {
+      if (acc > Math.max(14, 34 * k) && groundY - pts[i].y > 20 * k) {
         acc = 0;
         ctx.beginPath();
         ctx.moveTo(pts[i].x, pts[i].y + 8 * k);

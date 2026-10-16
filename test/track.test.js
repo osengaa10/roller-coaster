@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildTrack, drawnLength, resample, smooth, supportSpots, starSpots, tunnelRuns, splashSpot,
+  buildTrack, drawnLength, resample, smooth, supportSpots, supportLegs, starSpots, tunnelRuns, splashSpot,
   colorAt, normalizeStroke, RAINBOW, V_MIN, STATION,
 } from '../js/track.js';
 
@@ -171,4 +171,45 @@ test('splash pond sits at the bottom of a big drop, not on flat track', () => {
   assert.ok(tr.pos[i * 3 + 1] < 4.5);
   for (const [a, b] of tunnelRuns(tr, i)) assert.ok(i < a - 20 || i > b + 20, 'tunnel keeps clear of the pond');
   assert.equal(splashSpot(buildTrack([ground(0.3, 1.5)])), null);
+});
+
+test('tall supports become A-frames whose legs stay clear of the track', () => {
+  const tall = buildTrack([hill]);
+  const spots = supportSpots(tall);
+  assert.ok(spots.some((s) => s.spread > 0), 'a tall hill gets A-frames');
+  assert.ok(spots.every((s) => s.y > 10 || s.spread === 0), 'short supports stay single columns');
+  const under = stroke((t) => ({ x: 1.5 - t * 1.0, y: 0.12 + 0.05 * Math.sin(t * 6) }));
+  for (const strokes of [[hill], [loop], [hill, under]]) {
+    const tr = buildTrack(strokes);
+    for (const spot of supportSpots(tr).filter((s) => s.spread > 0)) {
+      for (const [a, b] of supportLegs(spot)) {
+        for (let k = 1; k <= 10; k++) {
+          const f = k / 10;
+          const p = [a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, a.z + (b.z - a.z) * f];
+          for (let j = 0; j < tr.count; j++) {
+            const q = [tr.pos[j * 3], tr.pos[j * 3 + 1], tr.pos[j * 3 + 2]];
+            if (Math.hypot(q[0] - spot.x, q[1] - spot.y, q[2] - spot.z) < 4) continue; // where it attaches
+            assert.ok(Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) > 1.2, 'leg through track');
+          }
+        }
+      }
+    }
+  }
+});
+
+test('every support sits right under the spine of upright track, even around loops', () => {
+  for (const strokes of [[loop], [hill, loop.map((p) => ({ x: p.x + 1.2, y: p.y }))]]) {
+    const tr = buildTrack(strokes);
+    const spots = supportSpots(tr);
+    assert.ok(spots.length > 3);
+    for (const sp of spots) {
+      let held = false;
+      for (let j = 0; j < tr.count && !held; j++) {
+        const dx = Math.hypot(tr.pos[j * 3] - sp.x, tr.pos[j * 3 + 2] - sp.z);
+        const above = tr.pos[j * 3 + 1] - sp.y;
+        held = dx < 0.25 && above > 0.45 && above < 0.65 && tr.up[j * 3 + 1] > 0.75;
+      }
+      assert.ok(held, `support at ${sp.x.toFixed(1)},${sp.y.toFixed(1)} holds nothing`);
+    }
+  }
 });

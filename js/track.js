@@ -10,7 +10,9 @@ export const MIN_Y = 0.025;
 export const STEP = 0.5; // meters between final track samples
 
 export const V_MIN = 5.5; // chain-lift speed: the train never stalls or rolls back
-export const V_MAX = 24;
+export const V_MAX = 30;
+// The lift chain runs faster the higher it goes, so a climb into space doesn't take forever.
+export const liftSpeed = (height) => Math.min(24, V_MIN + Math.max(0, height) * 0.1);
 const G = 9.81;
 const FRICTION = 0.015;
 const BRAKE_LENGTH = 0.7; // normalized
@@ -205,8 +207,9 @@ export function buildTrack(strokes) {
   for (let i = 0; i < n; i++) {
     if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * FRICTION * G * STEP;
     let v = Math.sqrt(Math.max(0, v2));
-    if (v < V_MIN) {
-      v = V_MIN;
+    const floor = liftSpeed(pos[i * 3 + 1]);
+    if (v < floor) {
+      v = floor;
       lift[i] = tan[i * 3 + 1] > 0.05 ? 1 : 0;
     }
     v = Math.min(v, V_MAX);
@@ -239,17 +242,30 @@ export function buildTrack(strokes) {
 const POLE_EVERY = 7; // meters
 const POLE_ATTACH = 3; // meters of track either side that the pillar is allowed to touch
 const CLEARANCE = 1.6; // horizontal meters a pillar must stay away from the track and car
+const A_FRAME_FROM = 10; // meters: taller supports become two-legged A-frames
+const UPRIGHT = 0.8; // track tilted more than this (up.y) gets no supports
+const LEG_CLEARANCE = 1.6;
+
+// The two legs of an A-frame support, as [top, bottom] points.
+export function supportLegs(spot) {
+  return [-1, 1].map((s) => [
+    { x: spot.x + s * spot.dir.x * 0.3, y: spot.y, z: spot.z + s * spot.dir.z * 0.3 },
+    { x: spot.x + s * spot.dir.x * spot.spread, y: 0, z: spot.z + s * spot.dir.z * spot.spread },
+  ]);
+}
 
 export function supportSpots(track) {
   const { count: n, pos, up, step } = track;
   const spots = [];
   const near = Math.round(POLE_ATTACH / step);
   for (let i = 0; i < n; i += Math.round(POLE_EVERY / step)) {
-    const flip = up[i * 3 + 1] > 0 ? -0.6 : 0.6; // hang under the spine, even upside down
+    // Only under upright track: in loops and other inversions "under the spine" points sideways
+    // or up, and a column there would hold nothing. Loops hold themselves up.
+    if (up[i * 3 + 1] < UPRIGHT) continue;
     const base = {
-      x: pos[i * 3] + up[i * 3] * flip,
-      y: pos[i * 3 + 1] + up[i * 3 + 1] * flip,
-      z: pos[i * 3 + 2] + up[i * 3 + 2] * flip,
+      x: pos[i * 3] - up[i * 3] * 0.6,
+      y: pos[i * 3 + 1] - up[i * 3 + 1] * 0.6,
+      z: pos[i * 3 + 2] - up[i * 3 + 2] * 0.6,
     };
     if (base.y < 1) continue;
     let blocked = false;
@@ -259,9 +275,35 @@ export function supportSpots(track) {
       const close = Math.hypot(pos[j * 3] - base.x, pos[j * 3 + 2] - base.z) < CLEARANCE;
       blocked = below && close;
     }
-    if (!blocked) spots.push(base);
+    if (blocked) continue;
+
+    // Sideways direction (across the track, level with the ground) for A-frame legs.
+    const t = [track.tan[i * 3], track.tan[i * 3 + 2]];
+    const flat = Math.hypot(t[0], t[1]);
+    base.dir = flat > 0.2 ? { x: -t[1] / flat, z: t[0] / flat } : { x: 0, z: 1 };
+    base.spread = 0;
+    if (base.y > A_FRAME_FROM) {
+      base.spread = 0.8 + Math.min(base.y, 40) * 0.12; // legs stop spreading on giant towers
+      if (legsHitTrack(track, i, near, supportLegs(base))) base.spread = 0;
+    }
+    spots.push(base);
   }
   return spots;
+}
+
+function legsHitTrack(track, i, near, legs) {
+  const { count: n, pos } = track;
+  for (const [a, b] of legs) {
+    for (let k = 0; k <= 10; k++) {
+      const f = k / 10;
+      const p = [a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, a.z + (b.z - a.z) * f];
+      for (let j = 0; j < n; j++) {
+        if (Math.abs(i - j) <= near) continue;
+        if (Math.hypot(pos[j * 3] - p[0], pos[j * 3 + 1] - p[1], pos[j * 3 + 2] - p[2]) < LEG_CLEARANCE) return true;
+      }
+    }
+  }
+  return false;
 }
 
 // The ride proper, between leaving the station and reaching the brake run (sample indices).

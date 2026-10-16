@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { V_MAX } from './track.js';
 import * as sound from './sound.js';
-import { makeStaticWorld, makeTrackWorld, disposeTree } from './scenery.js';
+import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree } from './scenery.js';
 import { makeSeatCar, makeTrainCar, makeRider, makeHands, FRIENDS, FRIEND_SEAT } from './characters.js';
 import { Effects } from './effects.js';
 
@@ -12,6 +12,9 @@ const START_DELAY = 1.3; // seconds sitting in the station before rolling
 const CAR_GAP = 2.7; // meters between train cars
 const SKY = new THREE.Color('#8fd3ff');
 const DUSK = new THREE.Color('#4a5aa8');
+const SPACE = new THREE.Color('#060820');
+const SPACE_FROM = 110; // meters: the sky starts getting dark
+const SPACE_TO = 260; // meters: full outer space
 
 export class Ride {
   constructor(canvas, { onFinish = () => {}, onStar = () => {} } = {}) {
@@ -30,6 +33,9 @@ export class Ride {
     sun.position.set(-100, 200, 80);
     this.scene.add(sun);
     this.scene.add(makeStaticWorld());
+    this.space = makeSpace();
+    this.scene.add(this.space.group);
+    this.sky = new THREE.Color();
 
     // Front-seat view: the car nose and his own arms hang off the camera.
     this.seatCar = makeSeatCar();
@@ -44,7 +50,7 @@ export class Ride {
     ];
     this.scene.add(...this.cars);
     this.kid = makeRider('kid');
-    this.kid.group.position.set(-0.45, 0.25, 0.1);
+    this.kid.group.position.set(-0.45, 0.55, -0.3);
     this.cars[0].add(this.kid.group);
     this.friend = null;
     this.friendKind = null;
@@ -83,6 +89,7 @@ export class Ride {
       this.track = track;
       this.world = makeTrackWorld(track, EYE);
       this.scene.add(this.world.group);
+      this.space.place(track.pos[(track.count >> 1) * 3]);
     }
     for (const star of this.world.stars) star.holder.visible = true;
 
@@ -105,9 +112,8 @@ export class Ride {
     this.handsTimer = 0;
     this.lastYay = -1;
     this.finished = false;
+    this.dusk = 0;
     this.effects.clear();
-    this.scene.background.copy(SKY);
-    this.scene.fog.color.copy(SKY);
     this.camUp.set(0, 1, 0);
     this.applyMode(true);
     this.running = true;
@@ -142,7 +148,7 @@ export class Ride {
       f.scale.setScalar(0.75);
       this.camera.add(f);
     } else {
-      f.position.set(0.45, 0.25, 0.1);
+      f.position.set(0.45, 0.55, -0.3);
       f.rotation.set(0, 0, 0);
       f.scale.setScalar(1);
       this.cars[0].add(f);
@@ -188,17 +194,27 @@ export class Ride {
 
     for (const star of this.world.stars) if (star.holder.visible) star.spin.rotation.y += dt * 3;
     this.effects.update(dt);
-    if (this.finished) {
-      const k = Math.min(1, dt * 0.6);
-      this.scene.background.lerp(DUSK, k);
-      this.scene.fog.color.lerp(DUSK, k);
-    }
+    if (this.finished) this.dusk = Math.min(1, this.dusk + dt * 0.5);
 
     this.placeTrain();
     if (this.mode === 'seat') this.placeSeatCamera(this.s, 1 - Math.exp(-dt * 8));
     else this.placeChaseCamera(dt, false);
+    this.updateSky();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.loop);
+  }
+
+  // Blue sky, dusk at the finish, and outer space when the camera climbs high enough.
+  updateSky() {
+    const h = this.camera.position.y;
+    const t = Math.min(1, Math.max(0, (h - SPACE_FROM) / (SPACE_TO - SPACE_FROM)));
+    const space = t * t * (3 - 2 * t);
+    this.sky.copy(SKY).lerp(DUSK, this.dusk).lerp(SPACE, space);
+    this.scene.background.copy(this.sky);
+    this.scene.fog.color.copy(this.sky);
+    this.scene.fog.near = 120 + space * 800;
+    this.scene.fog.far = 650 + space * 3500;
+    this.space.update(this.camera.position, space);
   }
 
   // Things that happen at places along the track.
@@ -262,7 +278,7 @@ export class Ride {
       const side = new THREE.Vector3().crossVectors(up, tan).normalize();
       m.makeBasis(side, up, tan);
       car.quaternion.setFromRotationMatrix(m);
-      car.position.copy(this.vec(tr.pos, s)).addScaledVector(up, 0.25);
+      car.position.copy(this.vec(tr.pos, s));
     });
   }
 
@@ -291,8 +307,8 @@ export class Ride {
       else this.chaseDir.lerp(flat, 1 - Math.exp(-dt * 1.2)).normalize();
     }
     const sideways = new THREE.Vector3(-this.chaseDir.z, 0, this.chaseDir.x);
-    const want = p.clone().addScaledVector(this.chaseDir, -13).addScaledVector(sideways, -7);
-    want.y = Math.max(p.y + 6, 3);
+    const want = p.clone().addScaledVector(this.chaseDir, -9).addScaledVector(sideways, -5);
+    want.y = Math.max(p.y + 4, 2.5);
     if (snap) {
       this.chasePos.copy(want);
       this.chaseLook.copy(p);
