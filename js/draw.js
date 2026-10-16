@@ -4,6 +4,9 @@ import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
 const MAX_HISTORY = 60;
+const MIN_ZOOM = 0.35; // two-finger pinch can zoom out to here (1 = the sky is one track-height tall)
+const TOP_Y = 1.6; // highest point he can draw when zoomed out (normalized)
+const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 
 export class DrawPad {
   constructor(canvas, hand, { strokes = [], onChange = () => {} } = {}) {
@@ -14,11 +17,17 @@ export class DrawPad {
     this.color = 0;
     this.history = [];
     this.onChange = onChange;
-    this.pointerId = null;
+    this.pointerId = null; // the finger that is drawing
+    this.pointers = new Map(); // every finger on the screen
+    this.pinch = null;
+    this.waitForLift = false; // after a pinch, ignore the leftover finger until all are lifted
+    this.zoom = 1;
+    this.panX = 0; // track x at the left edge of the screen
     this.dirty = true;
     this.active = true;
 
     this.resize();
+    this.fitView();
     window.addEventListener('resize', () => this.resize());
     canvas.addEventListener('pointerdown', (e) => this.down(e));
     canvas.addEventListener('pointermove', (e) => this.move(e));
@@ -49,21 +58,49 @@ export class DrawPad {
     this.w = w;
     this.h = h;
     this.groundY = Math.round(h * GROUND);
-    this.unit = this.groundY; // px per normalized unit
+    // Keep the station clear of the iPhone notch in landscape.
+    const probe = document.getElementById('safe-probe');
+    this.left = probe ? parseFloat(getComputedStyle(probe).paddingLeft) || 0 : 0;
+    this.setView(this.zoom, this.panX);
+  }
+
+  get unit() {
+    return this.groundY * this.zoom; // px per normalized unit
+  }
+
+  // Decorations (line widths, the station, the sun) scale with the screen and the zoom.
+  get k() {
+    return Math.max(0.3, Math.min(1.1, this.unit / REF_UNIT));
+  }
+
+  setView(zoom, panX) {
+    this.zoom = Math.max(MIN_ZOOM, Math.min(1, zoom));
+    const visible = (this.w - this.left) / this.unit;
+    const farthest = Math.max(...pathFromStrokes(this.strokes).map((p) => p.x));
+    this.panX = Math.max(0, Math.min(panX, farthest - visible * 0.5));
     this.dirty = true;
   }
 
+  // Zoom out just enough to show the whole drawing (used when a saved drawing loads).
+  fitView() {
+    const pts = pathFromStrokes(this.strokes);
+    const maxX = Math.max(...pts.map((p) => p.x)) + 0.15;
+    const maxY = Math.max(...pts.map((p) => p.y)) + 0.1;
+    const fit = Math.min((this.w - this.left - 20) / (maxX * this.groundY), (this.groundY - 20) / (maxY * this.groundY));
+    this.setView(Math.min(1, fit), 0);
+  }
+
   toScreen(p) {
-    return { x: p.x * this.unit, y: this.groundY - p.y * this.unit };
+    return { x: this.left + (p.x - this.panX) * this.unit, y: this.groundY - p.y * this.unit };
   }
 
   toTrack(clientX, clientY) {
     const r = this.canvas.getBoundingClientRect();
-    const x = Math.max(4, clientX - r.left);
+    const x = Math.max(this.left + 4, clientX - r.left);
     const y = Math.min(clientY - r.top, this.groundY);
-    const top = 1 - 12 / this.unit;
+    const top = Math.min(TOP_Y, (this.groundY - 12) / this.unit);
     return {
-      x: +(x / this.unit).toFixed(4),
+      x: +((x - this.left) / this.unit + this.panX).toFixed(4),
       y: +Math.min(top, Math.max(MIN_Y, (this.groundY - y) / this.unit)).toFixed(4),
     };
   }
@@ -71,7 +108,9 @@ export class DrawPad {
   down(e) {
     e.preventDefault();
     sound.unlock();
-    if (this.pointerId !== null) return; // ignore extra fingers
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) return this.startPinch();
+    if (this.pointerId !== null || this.pinch || this.waitForLift) return; // ignore extra fingers
     this.pointerId = e.pointerId;
     try {
       this.canvas.setPointerCapture(e.pointerId);
@@ -87,6 +126,8 @@ export class DrawPad {
   }
 
   move(e) {
+    if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pinch) return this.movePinch();
     if (e.pointerId !== this.pointerId) return;
     e.preventDefault();
     const stroke = this.strokes[this.strokes.length - 1].p;
@@ -101,11 +142,48 @@ export class DrawPad {
   }
 
   up(e) {
+    this.pointers.delete(e.pointerId);
+    if (this.pinch && this.pointers.size < 2) {
+      this.pinch = null;
+      this.waitForLift = this.pointers.size > 0;
+    }
+    if (this.pointers.size === 0) this.waitForLift = false;
     if (e.pointerId !== this.pointerId) return;
     this.pointerId = null;
     sound.drawStop();
     this.dirty = true;
     this.onChange();
+  }
+
+  // Two fingers: pinch to zoom out/in, slide to move along the track.
+  startPinch() {
+    if (this.pointerId !== null) {
+      // The first finger had just started a line; a tiny one was really the start of a pinch.
+      const stroke = this.strokes[this.strokes.length - 1];
+      this.pointerId = null;
+      sound.drawStop();
+      if (stroke.p.length < 15) {
+        this.strokes.pop();
+        this.history.pop();
+      }
+      this.onChange();
+    }
+    const [a, b] = [...this.pointers.values()];
+    const midX = (a.x + b.x) / 2;
+    this.pinch = {
+      dist: Math.max(20, Math.hypot(a.x - b.x, a.y - b.y)),
+      zoom: this.zoom,
+      anchor: (midX - this.left) / this.unit + this.panX, // track x under the fingers
+    };
+  }
+
+  movePinch() {
+    const [a, b] = [...this.pointers.values()];
+    if (!b) return;
+    const zoom = this.pinch.zoom * (Math.hypot(a.x - b.x, a.y - b.y) / this.pinch.dist);
+    const midX = (a.x + b.x) / 2;
+    this.zoom = Math.max(MIN_ZOOM, Math.min(1, zoom));
+    this.setView(this.zoom, this.pinch.anchor - (midX - this.left) / this.unit);
   }
 
   pushHistory() {
@@ -125,7 +203,7 @@ export class DrawPad {
     if (!this.strokes.length) return false;
     this.pushHistory(); // so undo can bring it back
     this.strokes = [];
-    this.dirty = true;
+    this.setView(1, 0);
     this.onChange();
     return true;
   }
@@ -141,28 +219,29 @@ export class DrawPad {
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, groundY);
 
-    // Sun
+    // Sun and clouds are scenery: sized to the screen, not the zoom.
+    const z = Math.max(0.45, Math.min(1, Math.min(w, h) / 834));
     const sx = w * 0.5;
-    const sy = h * 0.13;
+    const sy = h * 0.15;
     ctx.fillStyle = '#ffe14d';
     ctx.strokeStyle = '#ffe14d';
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 5 * z;
     ctx.lineCap = 'round';
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2;
       ctx.beginPath();
-      ctx.moveTo(sx + Math.cos(a) * 46, sy + Math.sin(a) * 46);
-      ctx.lineTo(sx + Math.cos(a) * 62, sy + Math.sin(a) * 62);
+      ctx.moveTo(sx + Math.cos(a) * 46 * z, sy + Math.sin(a) * 46 * z);
+      ctx.lineTo(sx + Math.cos(a) * 62 * z, sy + Math.sin(a) * 62 * z);
       ctx.stroke();
     }
     ctx.beginPath();
-    ctx.arc(sx, sy, 36, 0, Math.PI * 2);
+    ctx.arc(sx, sy, 36 * z, 0, Math.PI * 2);
     ctx.fill();
 
     // Clouds
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    for (const [cx, cy, s] of [[0.18, 0.18, 1], [0.78, 0.3, 1.3], [0.35, 0.42, 0.8]]) {
-      cloud(ctx, cx * w, cy * h, s);
+    for (const [cx, cy, s] of [[0.18, 0.22, 1], [0.78, 0.3, 1.3], [0.35, 0.45, 0.8]]) {
+      cloud(ctx, cx * w, cy * h, s * z);
     }
 
     // Ground
@@ -176,20 +255,20 @@ export class DrawPad {
   }
 
   drawTrack() {
-    const { ctx, groundY } = this;
+    const { ctx, groundY, k } = this;
     const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c }));
 
     // Support poles
     ctx.strokeStyle = '#b9c3d6';
-    ctx.lineWidth = 5;
+    ctx.lineWidth = Math.max(2, 5 * k);
     ctx.lineCap = 'butt';
     let acc = 0;
     for (let i = 1; i < pts.length; i++) {
       acc += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      if (acc > 34 && groundY - pts[i].y > 20) {
+      if (acc > 34 * k && groundY - pts[i].y > 20 * k) {
         acc = 0;
         ctx.beginPath();
-        ctx.moveTo(pts[i].x, pts[i].y + 8);
+        ctx.moveTo(pts[i].x, pts[i].y + 8 * k);
         ctx.lineTo(pts[i].x, groundY + 4);
         ctx.stroke();
       }
@@ -211,15 +290,15 @@ export class DrawPad {
     ctx.lineCap = 'round';
     // Ties
     path();
-    ctx.setLineDash([6, 8]);
+    ctx.setLineDash([Math.max(2, 6 * k), Math.max(3, 8 * k)]);
     ctx.lineCap = 'butt';
     ctx.strokeStyle = '#7a4a2a';
-    ctx.lineWidth = 20;
+    ctx.lineWidth = Math.max(7, 20 * k);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineCap = 'round';
     // Rail, in each stroke's crayon color. Same-colored pieces are batched into one path.
-    ctx.lineWidth = 8;
+    ctx.lineWidth = Math.max(3, 8 * k);
     let along = 0;
     let color = null;
     const mid = (i) => ({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
@@ -242,50 +321,50 @@ export class DrawPad {
     if (color) ctx.stroke();
     path();
     ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = Math.max(1, 2 * k);
     ctx.stroke();
   }
 
   drawStation() {
-    const { ctx } = this;
+    const { ctx, k } = this;
     const a = this.toScreen({ x: STATION.x0, y: STATION.y });
     const b = this.toScreen({ x: STATION.x1, y: STATION.y });
     const len = b.x - a.x;
 
     // Roof on posts
     ctx.fillStyle = '#8a5a3c';
-    ctx.fillRect(a.x + 4, a.y - 70, 6, 70);
-    ctx.fillRect(b.x - 10, a.y - 70, 6, 70);
+    ctx.fillRect(a.x + 4 * k, a.y - 70 * k, 6 * k, 70 * k);
+    ctx.fillRect(b.x - 10 * k, a.y - 70 * k, 6 * k, 70 * k);
     ctx.fillStyle = '#ff8c42';
     ctx.beginPath();
-    ctx.moveTo(a.x - 10, a.y - 66);
-    ctx.lineTo(a.x + len / 2, a.y - 100);
-    ctx.lineTo(b.x + 10, a.y - 66);
+    ctx.moveTo(a.x - 10 * k, a.y - 66 * k);
+    ctx.lineTo(a.x + len / 2, a.y - 100 * k);
+    ctx.lineTo(b.x + 10 * k, a.y - 66 * k);
     ctx.closePath();
     ctx.fill();
     // Platform
     ctx.fillStyle = '#d9a066';
-    ctx.fillRect(a.x - 6, a.y + 10, len + 12, this.groundY - a.y - 10);
+    ctx.fillRect(a.x - 6 * k, a.y + 10 * k, len + 12 * k, this.groundY - a.y - 10 * k);
 
     // Little train waiting at the station
     const colors = ['#ffd23f', '#3bceac', '#ee4266'];
-    const carW = Math.min(36, (len - 16) / 3);
+    const carW = (len - 22 * k) / 3;
     for (let i = 0; i < 3; i++) {
-      const x = a.x + 8 + i * (carW + 3);
+      const x = a.x + 8 * k + i * (carW + 3 * k);
       ctx.fillStyle = colors[i];
-      roundRect(ctx, x, a.y - 24, carW, 20, 6);
+      roundRect(ctx, x, a.y - 24 * k, carW, 20 * k, 6 * k);
       ctx.fill();
       ctx.fillStyle = '#333';
       ctx.beginPath();
-      ctx.arc(x + 7, a.y - 3, 4, 0, Math.PI * 2);
-      ctx.arc(x + carW - 7, a.y - 3, 4, 0, Math.PI * 2);
+      ctx.arc(x + 7 * k, a.y - 3 * k, 4 * k, 0, Math.PI * 2);
+      ctx.arc(x + carW - 7 * k, a.y - 3 * k, 4 * k, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   // A pointing hand that shows how to draw a hill, only while the track is empty.
   animateHand(t) {
-    const show = this.strokes.length === 0 && this.pointerId === null;
+    const show = this.strokes.length === 0 && this.pointers.size === 0;
     this.hand.style.opacity = show ? '1' : '0';
     if (!show) return;
     const cycle = (t / 3200) % 1;
@@ -294,7 +373,8 @@ export class DrawPad {
       x: STATION.x1 + 0.05 + k * 0.7,
       y: STATION.y + 0.03 + 0.35 * Math.sin(Math.PI * k),
     });
-    this.hand.style.transform = `translate(${p.x - 30}px, ${p.y - 6}px)`;
+    const size = this.hand.offsetHeight || 64;
+    this.hand.style.transform = `translate(${p.x - size * 0.47}px, ${p.y - size * 0.1}px)`;
   }
 }
 

@@ -26,9 +26,11 @@ No reading needed, no menus, and nothing can go wrong: the train never gets stuc
 | 👁 / seat (blue, during ride) | Watch from outside / back to the front seat |
 | ⟳ / ✏️ (after ride) | Ride again / draw again |
 
-## Play on the iPad
+## Play on an iPad or iPhone
 
-Open the GitHub Pages URL in Safari, then **Share → Add to Home Screen**. It launches full-screen like an app and keeps working offline.
+Open the GitHub Pages URL in Safari, then **Share → Add to Home Screen**. It launches full-screen like an app (no Safari toolbars eating the screen) and keeps working offline.
+
+On an iPhone, hold it sideways; a little turning-phone picture asks for that if it's upright. **Pinch with two fingers** on the drawing to zoom out for a longer, taller coaster (and back in), and slide two fingers to move along it. A saved coaster opens zoomed to fit.
 
 ## Run locally
 
