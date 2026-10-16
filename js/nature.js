@@ -162,7 +162,8 @@ export function makeMountains(center = new THREE.Vector3(300, 0, 0)) {
   const rand = mulberry32(11);
   // No haze on the mountains (it made them look see-through); their blue-grey rock
   // already reads as far away.
-  const material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, fog: false });
+  // Both sides drawn: the rugged bumps can tip a face inside-out, which made holes you could see through.
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, fog: false, side: THREE.DoubleSide });
   const rock = new THREE.Color('#8794ab');
   const rock2 = new THREE.Color('#76849c');
   const snow = new THREE.Color('#f4f7fb');
@@ -181,7 +182,7 @@ export function makeMountains(center = new THREE.Vector3(300, 0, 0)) {
       const z = pos.getZ(k);
       const up = (y + h / 2) / h; // 0 at the base, 1 at the peak
       const n = noise(x * 0.02 + i * 7, z * 0.02 + y * 0.01);
-      if (up < 0.98) pos.setXYZ(k, x * (0.85 + n * 0.3), y + (n - 0.5) * h * 0.08, z * (0.85 + n * 0.3));
+      if (up < 0.98) pos.setXYZ(k, x * (0.92 + n * 0.16), y + (n - 0.5) * h * 0.03, z * (0.92 + n * 0.16));
       c.copy(up > 0.6 + n * 0.15 ? snow : n > 0.5 ? rock : rock2);
       colors.set([c.r, c.g, c.b], k * 3);
     }

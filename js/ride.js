@@ -212,30 +212,33 @@ export class Ride {
     this.placeTrain();
     if (this.mode === 'seat') this.placeSeatCamera(this.s, 1 - Math.exp(-dt * 8));
     else this.placeChaseCamera(dt, false);
-    this.speedFeel(dt, speed01);
+    this.speedFeel(dt);
     this.updateSky();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.loop);
   }
 
   // The faster he goes, the wider the view, the more it rumbles, and the more wind streaks by.
-  speedFeel(dt, speed01) {
+  // Works in both views, and goes by real speed (m/s) so a normal hill's ~20 m/s drop feels fast.
+  speedFeel(dt) {
     const seat = this.mode === 'seat';
-    const fast = Math.min(1, Math.max(0, (speed01 - 0.25) / 0.75));
-    const boost = (seat ? 18 : 8) * fast * fast * (3 - 2 * fast);
+    const ramp = (from, to) => {
+      const t = Math.min(1, Math.max(0, (this.v - from) / (to - from)));
+      return t * t * (3 - 2 * t);
+    };
+    const boost = (seat ? 20 : 14) * ramp(8, 28);
     this.fovBoost += (boost - this.fovBoost) * Math.min(1, dt * 3);
     this.camera.fov = this.baseFov + this.fovBoost;
     this.camera.updateProjectionMatrix();
-    if (seat && this.v > 0) {
+    if (this.v > 0 && !this.finished) {
       const t = this.time;
-      const amp = 0.045 * speed01 * speed01;
+      const amp = (seat ? 0.05 : 0.08) * ramp(6, 35);
       this.camera.translateX(amp * (Math.sin(t * 31) * 0.6 + Math.sin(t * 53 + 1.3) * 0.4));
       this.camera.translateY(amp * (Math.sin(t * 37 + 0.7) * 0.6 + Math.sin(t * 67) * 0.4));
       this.camera.rotateZ(amp * 0.1 * Math.sin(t * 43));
     }
-    const streak = seat ? Math.min(1, Math.max(0, (speed01 - 0.35) / 0.45)) : 0;
-    this.streaks.update(dt, this.v, streak);
-    if (this.speedfx) this.speedfx.style.opacity = String(seat ? 0.75 * Math.max(0, (speed01 - 0.45) / 0.55) : 0);
+    this.streaks.update(dt, this.v, ramp(12, 30));
+    if (this.speedfx) this.speedfx.style.opacity = String(0.75 * ramp(15, 35));
   }
 
   // Blue sky with a haze at the horizon, a sunset at the finish, and outer space up high.
@@ -348,7 +351,9 @@ export class Ride {
       else this.chaseDir.lerp(flat, 1 - Math.exp(-dt * 1.2)).normalize();
     }
     const sideways = new THREE.Vector3(-this.chaseDir.z, 0, this.chaseDir.x);
-    const want = p.clone().addScaledVector(this.chaseDir, -9).addScaledVector(sideways, -5);
+    // The faster the train, the further it pulls away from the camera.
+    const back = 9 + 7 * Math.min(1, Math.max(0, (this.v - 8) / 25));
+    const want = p.clone().addScaledVector(this.chaseDir, -back).addScaledVector(sideways, -5);
     want.y = Math.max(p.y + 4, 2.5);
     if (this.chaseLast && !snap) {
       // Move along with the train first, so even at space speeds the camera keeps up.
