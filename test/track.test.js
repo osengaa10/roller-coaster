@@ -224,15 +224,15 @@ test('steep lift hills get supports too', () => {
 
 // A climb way up into space, as drawn when he holds against the top edge.
 const space = [
-  ...stroke((t) => ({ x: 0.3 + t * 40, y: 0.06 + t * 240 }), 300),
-  ...stroke((t) => ({ x: 40.3 + t * 40, y: 240 - t * 239.9 }), 300),
+  ...stroke((t) => ({ x: 0.3 + t * 16, y: 0.06 + t * 100 }), 300),
+  ...stroke((t) => ({ x: 16.3 + t * 16, y: 100 - t * 99.9 }), 300),
 ];
 
 test('a giant space coaster stays a sensible size', () => {
   const tr = buildTrack([space]);
   assertFinite(tr);
   assert.ok(tr.count <= 16100, `too many samples: ${tr.count}`);
-  assert.ok(Math.max(...Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1])) > 9000, 'reaches ~10 km');
+  assert.ok(Math.max(...Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1])) > 3500, 'reaches ~4 km');
   assert.ok(starSpots(tr).length <= 41);
   assert.ok(supportSpots(tr).every((s) => s.y < 301), 'no supports up in space');
 });
@@ -242,6 +242,6 @@ test('speeds stay smooth: never faster than 100 m/s, and a 10 km hill rides in m
   assert.ok(Math.max(...tr.speed) <= 100);
   let seconds = 0;
   for (let i = 1; i < tr.count; i++) seconds += tr.step / tr.speed[i];
-  assert.ok(seconds < 360, `ride takes ${seconds.toFixed(0)} s`);
+  assert.ok(seconds < 150, `ride takes ${seconds.toFixed(0)} s`);
   assert.ok(Math.max(...tr.speed) > 45, 'giant drops really fly');
 });

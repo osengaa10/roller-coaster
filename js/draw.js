@@ -4,10 +4,10 @@ import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
 const MAX_HISTORY = 60;
-const MIN_ZOOM = 0.004; // how far the view can zoom out (1 = the sky is one track-height tall)
-const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 250 = 10 km, up in space)
+const MIN_ZOOM = 0.01; // how far the view can zoom out (1 = the sky is one track-height tall)
+const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 100 = 4 km, up in space)
 const SUPPORT_TOP = 7.5; // normalized (300 m): no supports drawn above this, same as the ride
-const EARTH_R = 1200; // normalized; a pretend-small Earth so its curve shows when zoomed way out
+const EARTH_R = 500; // normalized; a pretend-small Earth so its curve shows when zoomed way out
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the edge
 
@@ -16,10 +16,10 @@ const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds ag
 const SKY_STOPS = [
   [0, [201, 236, 255]],
   [1, [79, 179, 255]],
-  [8, [48, 120, 230]],
-  [40, [30, 62, 165]],
-  [110, [14, 20, 62]],
-  [170, [5, 6, 26]],
+  [6, [48, 120, 230]],
+  [25, [30, 62, 165]],
+  [55, [14, 20, 62]],
+  [80, [5, 6, 26]],
 ];
 function skyAt(alt) {
   let i = 0;
@@ -34,13 +34,13 @@ function skyAt(alt) {
 const STARS = (() => {
   let seed = 9;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  return Array.from({ length: 900 }, () => ({ x: -60 + rand() * 760, y: 30 + Math.pow(rand(), 0.7) * 230, r: 0.6 + rand() * 1.5 }));
+  return Array.from({ length: 700 }, () => ({ x: -40 + rand() * 340, y: 20 + Math.pow(rand(), 0.7) * 82, r: 0.6 + rand() * 1.5 }));
 })();
-const STARS_FROM = 30; // units: stars start to show above here
+const STARS_FROM = 20; // units: stars start to show above here
 const PLANETS = [
-  { x: 30, y: 75, r: 4, color: '#e9e9ee', craters: true },
-  { x: 95, y: 145, r: 7, color: '#e8c27a', ring: '#d9b77a' },
-  { x: 175, y: 215, r: 3.5, color: '#d9623b' },
+  { x: 20, y: 42, r: 2.5, color: '#e9e9ee', craters: true },
+  { x: 55, y: 66, r: 4.5, color: '#e8c27a', ring: '#d9b77a' },
+  { x: 92, y: 86, r: 2, color: '#d9623b' },
 ];
 
 export class DrawPad {
@@ -281,7 +281,7 @@ export class DrawPad {
     sky.addColorStop(1, skyAt(topAlt));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, groundY);
-    const space = Math.max(0, Math.min(1, (topAlt - 8) / 60)); // 0 = all blue, 1 = deep space on screen
+    const space = Math.max(0, Math.min(1, (topAlt - 6) / 40)); // 0 = all blue, 1 = deep space on screen
     if (topAlt > STARS_FROM) this.drawSpace();
 
     // Sun and clouds are scenery: sized to the screen, not the zoom.
@@ -346,7 +346,7 @@ export class DrawPad {
     for (const s of STARS) {
       const p = this.toScreen(s);
       if (p.x < -4 || p.x > this.w + 4 || p.y < -4) continue;
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - STARS_FROM) / 60)})`;
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - STARS_FROM) / 30)})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, s.r, 0, Math.PI * 2);
       ctx.fill();

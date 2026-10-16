@@ -18,7 +18,7 @@ const DUSK_TOP = new THREE.Color('#3a3f8f');
 const DUSK_HORIZON = new THREE.Color('#f4a37c');
 const SPACE = new THREE.Color('#060820');
 const SPACE_FROM = 300; // meters: the sky starts getting darker
-const SPACE_TO = 6000; // meters: full outer space (the change is spread out on a log scale)
+const SPACE_TO = 3200; // meters: full outer space (the change is spread out on a log scale)
 
 export class Ride {
   constructor(canvas, { onFinish = () => {}, onStar = () => {} } = {}) {
@@ -183,7 +183,8 @@ export class Ride {
 
   loop(now) {
     if (!this.running) return;
-    const dt = Math.min(0.05, (now - this.last) / 1000) * this.timeScale;
+    // Allow long frames so a slow device doesn't put the whole ride in slow motion.
+    const dt = Math.min(0.1, (now - this.last) / 1000) * this.timeScale;
     this.last = now;
     this.time += dt;
     const tr = this.track;

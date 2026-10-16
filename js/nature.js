@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 
 export const SUN_DIR = new THREE.Vector3(-0.45, 0.42, -0.79).normalize();
-export const EARTH_R = 200000; // meters; a pretend-small Earth so its curve shows at ~10 km up
+export const EARTH_R = 80000; // meters; a pretend-small Earth so its curve shows at ~4 km up
 
 // --- Noise -------------------------------------------------------------------------------
 
@@ -229,7 +229,9 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     const dz = Math.max(bounds.min.z - z, 0, z - bounds.max.z);
     return Math.hypot(dx, dz);
   };
-  const curve = (x, z) => ((x - center.x) ** 2 + (z - center.z) ** 2) / (2 * EARTH_R);
+  // The ground curves down like the planet, but only past the park so the track area stays level.
+  const level = Math.hypot(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z) / 2 + 300;
+  const curve = (x, z) => Math.max(0, Math.hypot(x - center.x, z - center.z) - level) ** 2 / (2 * EARTH_R);
   const hills = (x, z) => {
     const fadeOut = 1 - smoothstep(2200, 2900, Math.hypot(x - center.x, z - center.z)); // meets the Earth smoothly
     return fbm(x / 280, z / 280) * 110 * smoothstep(70, 520, flat(x, z)) * fadeOut;
