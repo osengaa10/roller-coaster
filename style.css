@@ -159,6 +159,11 @@ canvas {
   display: none;
   place-items: center;
   background: rgba(255, 255, 255, 0.15);
+  /* Let taps through to the home button; only the big choices are tappable. */
+  pointer-events: none;
+}
+.choices .btn {
+  pointer-events: auto;
 }
 #finish.show {
   display: grid;

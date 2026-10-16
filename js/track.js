@@ -189,6 +189,37 @@ export function buildTrack(strokes) {
   return { count: n, step: STEP, length, pos, tan, up, speed, lift, whee };
 }
 
+// Where to stand support pillars: one every few meters, from just under the track down to
+// the grass, skipping any pillar that would poke through another part of the track
+// (under a crest, inside a loop, or where the track crosses back under itself).
+const POLE_EVERY = 7; // meters
+const POLE_ATTACH = 3; // meters of track either side that the pillar is allowed to touch
+const CLEARANCE = 1.6; // horizontal meters a pillar must stay away from the track and car
+
+export function supportSpots(track) {
+  const { count: n, pos, up, step } = track;
+  const spots = [];
+  const near = Math.round(POLE_ATTACH / step);
+  for (let i = 0; i < n; i += Math.round(POLE_EVERY / step)) {
+    const flip = up[i * 3 + 1] > 0 ? -0.6 : 0.6; // hang under the spine, even upside down
+    const base = {
+      x: pos[i * 3] + up[i * 3] * flip,
+      y: pos[i * 3 + 1] + up[i * 3 + 1] * flip,
+      z: pos[i * 3 + 2] + up[i * 3 + 2] * flip,
+    };
+    if (base.y < 1) continue;
+    let blocked = false;
+    for (let j = 0; j < n && !blocked; j++) {
+      if (Math.abs(i - j) <= near) continue;
+      const below = pos[j * 3 + 1] - 0.8 < base.y; // bottom of that track's spine
+      const close = Math.hypot(pos[j * 3] - base.x, pos[j * 3 + 2] - base.z) < CLEARANCE;
+      blocked = below && close;
+    }
+    if (!blocked) spots.push(base);
+  }
+  return spots;
+}
+
 function boxBlur(arr, r) {
   const out = new Float32Array(arr.length);
   for (let i = 0; i < arr.length; i++) {

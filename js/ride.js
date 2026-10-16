@@ -1,6 +1,6 @@
 // First-person ride through the drawn track.
 import * as THREE from 'three';
-import { V_MAX } from './track.js';
+import { V_MAX, supportSpots } from './track.js';
 import * as sound from './sound.js';
 
 const RAIL_GAP = 0.6; // half distance between rails
@@ -233,11 +233,7 @@ function makeTrackWorld(tr) {
   g.add(ties);
 
   // Support poles from the spine down to the grass.
-  const poles = [];
-  for (let i = 0; i < n; i += 14) {
-    const base = P(i).addScaledVector(U(i), U(i).y > 0 ? -0.6 : 0.6);
-    if (base.y > 1) poles.push(base);
-  }
+  const poles = supportSpots(tr);
   if (poles.length) {
     const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.25, 1, 8), mat('#dfe6f2'), poles.length);
     poles.forEach((b, k) => {

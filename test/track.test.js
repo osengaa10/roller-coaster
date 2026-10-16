@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, drawnLength, resample, smooth, V_MIN, STATION } from '../js/track.js';
+import { buildTrack, drawnLength, resample, smooth, supportSpots, V_MIN, STATION } from '../js/track.js';
 
 // A stroke helper: f(t) for t in [0, 1] -> {x, y}
 const stroke = (f, n = 120) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
@@ -84,4 +84,32 @@ test('long right-to-left drawing is rolled back upright', () => {
 test('drawn length ignores the station', () => {
   assert.equal(drawnLength([]), 0);
   assert.ok(Math.abs(drawnLength([[{ x: STATION.x1 + 0.5, y: STATION.y }]]) - 0.5) < 1e-9);
+});
+
+// Any track point (away from where the pillar attaches) sitting right over the pillar's footprint.
+function pillarHits(tr, spots) {
+  const hits = [];
+  for (const b of spots) {
+    for (let j = 0; j < tr.count; j++) {
+      const p = [tr.pos[j * 3], tr.pos[j * 3 + 1], tr.pos[j * 3 + 2]];
+      const attached = Math.hypot(p[0] - b.x, p[1] - b.y, p[2] - b.z) < 4;
+      if (!attached && p[1] < b.y && Math.hypot(p[0] - b.x, p[2] - b.z) < 1.2) hits.push({ b, p });
+    }
+  }
+  return hits;
+}
+
+test('a plain hill gets support pillars', () => {
+  const tr = buildTrack([hill]);
+  assert.ok(supportSpots(tr).length > 5);
+});
+
+test('pillars never go through other parts of the track', () => {
+  // Over a hill, then back underneath it, plus a loop: lots of chances to stab the track.
+  const under = stroke((t) => ({ x: 1.5 - t * 1.0, y: 0.12 + 0.05 * Math.sin(t * 6) }));
+  for (const strokes of [[loop], [hill, under], [hill, under, loop.map((p) => ({ x: p.x + 0.2, y: p.y }))]]) {
+    const tr = buildTrack(strokes);
+    const hits = pillarHits(tr, supportSpots(tr));
+    assert.equal(hits.length, 0, `pillar through track at ${JSON.stringify(hits[0])}`);
+  }
 });
