@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Coaster" />
+    <meta name="theme-color" content="#4fb3ff" />
+    <title>Coaster Doodle</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      { "imports": { "three": "./vendor/three.module.min.js" } }
+    </script>
+  </head>
+  <body>
+    <section id="draw" class="screen active">
+      <canvas id="pad"></canvas>
+      <div id="hand" aria-hidden="true">👆</div>
+
+      <div class="corner top-right">
+        <button id="undo" class="btn blue" aria-label="Undo">
+          <svg viewBox="0 0 48 48"><path d="M18 10 6 21l12 11" /><path d="M7 21h20a12 12 0 0 1 0 24h-6" /></svg>
+        </button>
+        <button id="clear" class="btn orange" aria-label="Start over">
+          <svg viewBox="0 0 48 48"><path d="M9 13h30M19 13V8h10v5M13 13l2 28h18l2-28M21 20v15M27 20v15" /></svg>
+        </button>
+      </div>
+
+      <button id="go" class="btn green big" aria-label="Ride it">
+        <svg viewBox="0 0 48 48"><path class="fill" d="M15 8v32l26-16z" /></svg>
+      </button>
+    </section>
+
+    <section id="ride" class="screen">
+      <canvas id="view"></canvas>
+      <div class="corner top-left">
+        <button id="home" class="btn purple" aria-label="Back to drawing">
+          <svg viewBox="0 0 48 48"><path d="M6 24 24 8l18 16M11 20v20h26V20" /><path class="fill" d="M20 40V29h8v11z" /></svg>
+        </button>
+      </div>
+      <div id="finish">
+        <div id="confetti"></div>
+        <div class="choices">
+          <button id="again" class="btn green big" aria-label="Ride again">
+            <svg viewBox="0 0 48 48"><path d="M38 24a14 14 0 1 1-4.1-9.9" /><path class="fill" d="M40 6v14H26z" /></svg>
+          </button>
+          <button id="redraw" class="btn blue big" aria-label="Draw a new one">
+            <svg viewBox="0 0 48 48"><path d="M10 38l4-12 20-20 8 8-20 20zM14 26l8 8M30 10l8 8" /></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
