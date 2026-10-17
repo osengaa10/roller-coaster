@@ -27,8 +27,7 @@ Same idea, at a tropical water park on an island: sand, palm trees, beach umbrel
 1. **Draw** the slide. It starts at the top of a tower with stairs and a striped canopy.
 2. **Draw a tight circle** with your finger and it turns into a **toilet bowl**: when you lift your finger the circle becomes a funnel (with a swirly sound). On the ride you spin round and round the bowl, faster and faster, then get *flushed* down the drain and shoot out underneath. Go round twice for a bigger bowl. Big circles stay loops, inside a see-through closed tube.
 3. **Draw a quick zigzag** and it becomes **rapids**: a wide rocky white-water channel where the float bounces and spins over the waves, splashing.
-4. **Draw a line straight down** and it becomes a **trapdoor drop**: the float stops in a glass capsule at the top, the lights count down 3, 2, 1, the floor opens and you plunge straight down a tube.
-5. Ride it on a two-seat ring float with your animal friend sitting in front (you wear swim goggles).
+4. Ride it on a two-seat ring float with your animal friend sitting in front (you wear swim goggles).
 
 Things that happen on their own:
 - **Rubber ducks** bob along the slide. Scoop them up (quack!) and count them at the end.
@@ -36,7 +35,7 @@ Things that happen on their own:
 - Steep or upside-down parts become **closed tubes**.
 - Low stretches go through a **waterfall** into a rocky cave with glowing crystals.
 - **Fountains** arch water over the slide at the bottom of the biggest drop.
-- Every slide ends with a **splash into the pool** (the drawing shows a dotted line down to it), then a **fountain show**.
+- Every slide ends with a **splash into the pool**, then a **fountain show**.
 - Water splashes leave drops running down the screen.
 
 No reading needed, no menus, and nothing can go wrong: the train never gets stuck, lifting your finger and drawing again just keeps adding track, and undo can even bring back a cleared drawing.

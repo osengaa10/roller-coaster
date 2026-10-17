@@ -100,6 +100,33 @@ function bowlTexture(color) {
   return t;
 }
 
+// Whitewater on a wave crest: a frothy band of foam across the channel (v = 0.5 is the crest),
+// thick on top of the wave and trailing off into bubbles downstream. Transparent elsewhere.
+function crestTexture(seed) {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 256;
+  const g = c.getContext('2d');
+  const rand = mulberry32(seed);
+  const gauss = () => (rand() + rand() + rand() - 1.5) / 1.5;
+  for (let i = 0; i < 420; i++) {
+    const downstream = rand() < 0.35;
+    const x = rand() * 128;
+    const y = 128 + (downstream ? Math.abs(gauss()) * 90 : gauss() * 26);
+    const r = downstream ? 1.5 + rand() * 3 : 3 + rand() * 9;
+    g.fillStyle = `rgba(255,255,255,${(downstream ? 0.35 : 0.55) + rand() * 0.4})`;
+    for (const dx of [0, 128, -128]) {
+      g.beginPath();
+      g.ellipse(x + dx, y, r * 1.4, r, 0, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
 // A whirlpool: spiral arms of foam on see-through water.
 function swirlTexture() {
   const c = document.createElement('canvas');
@@ -235,7 +262,7 @@ export function makeSlideWorld(tr, eye) {
   const edgeR = (i, s) => centerR(i).addScaledVector(U(i), -RW * Math.cos(RAPIDS_ARC)).addScaledVector(side(i), s * RW * Math.sin(RAPIDS_ARC));
   const floorR = (i, x) => P(i).addScaledVector(U(i), RW - Math.sqrt(RW * RW - x * x) - SINK).addScaledVector(side(i), x);
   const boulders = [];
-  const foamCaps = [];
+  const crests = []; // [sample id] at every wave crest, for the spray
   const rand = mulberry32(n * 7 + 3);
   for (const run of runs) {
     const ids = fewer(run.ids);
@@ -243,15 +270,16 @@ export function makeSlideWorld(tr, eye) {
     if (run.kind === 'rapids') {
       g.add(new THREE.Mesh(tube(ids, centerR, D, side, RW, { sides: 16, arc: RAPIDS_ARC, colorAt: troughPaint }), glass));
       for (const s of [-1, 1]) g.add(new THREE.Mesh(tube(ids, (i) => edgeR(i, s), U, side, 0.12, { sides: 6 }), lip));
-      // Boulders along both banks, and foam on every wave crest (the waves are in track.js).
+      // Boulders along both banks, and whitewater on every wave crest (the waves are in track.js).
       const first = ids.find((i) => tr.special[i] === 1) ?? ids[0];
+      run.first = first;
       for (const i of ids) {
         if ((i - first) % 3 === 0) {
           for (const s of [-1, 1]) boulders.push([edgeR(i, s).addScaledVector(side(i), s * (0.4 + rand() * 0.5)).addScaledVector(U(i), -0.1), 0.35 + rand() * 0.55, rand() * 6]);
         }
         const d = (i - first) * tr.step - WAVE_LENGTH / 4;
         const phase = ((d % WAVE_LENGTH) + WAVE_LENGTH) % WAVE_LENGTH;
-        if (tr.special[i] === 1 && phase < tr.step) for (const x of [-1.0, 0, 1.0]) foamCaps.push([floorR(i, x + (rand() - 0.5) * 0.3).addScaledVector(U(i), 0.14), i]);
+        if (tr.special[i] === 1 && phase < tr.step) crests.push(i);
       }
     } else if (run.kind === 'open') {
       g.add(new THREE.Mesh(tube(ids, center, D, side, RT, { sides: 14, arc: OPEN_ARC, colorAt: troughPaint }), glass));
@@ -276,14 +304,6 @@ export function makeSlideWorld(tr, eye) {
     });
     g.add(rocks);
   }
-  if (foamCaps.length) {
-    const caps = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 6), mat('#ffffff', { emissive: '#8a9aa8' }), foamCaps.length);
-    foamCaps.forEach(([at, i], k) => caps.setMatrixAt(k, frame(i).scale(new THREE.Vector3(0.45, 0.12, 0.3)).setPosition(at)));
-    g.add(caps);
-    updates.push((dt, time) => {
-      caps.scale.y = 1 + 0.35 * Math.sin(time * 9);
-    });
-  }
   if (collars.length) {
     const ring = new THREE.InstancedMesh(new THREE.TorusGeometry(RT + 0.06, 0.09, 6, 20), shiny('#ffffff'), collars.length);
     collars.forEach((i, k) => ring.setMatrixAt(k, frame(i).setPosition(center(i))));
@@ -294,7 +314,8 @@ export function makeSlideWorld(tr, eye) {
   const streaks = streakTexture();
   const waterMat = new THREE.MeshPhongMaterial({ color: '#bfeaff', map: streaks, transparent: true, opacity: 0.75, shininess: 120, specular: '#ffffff', depthWrite: false, side: THREE.DoubleSide });
   const foam = streakTexture(true);
-  const foamMat = new THREE.MeshPhongMaterial({ color: '#ffffff', map: foam, transparent: true, opacity: 0.85, shininess: 80, specular: '#ffffff', depthWrite: false, side: THREE.DoubleSide });
+  // Rapids water: churning turquoise with foam streaks, thick enough that the channel doesn't show through.
+  const foamMat = new THREE.MeshPhongMaterial({ color: '#8fe3f5', emissive: '#1a5a70', map: foam, transparent: true, opacity: 0.97, shininess: 80, specular: '#ffffff', depthWrite: false, side: THREE.DoubleSide });
   for (const run of runs) {
     const ids = fewer(run.ids);
     if (ids.length < 2) continue;
@@ -310,6 +331,82 @@ export function makeSlideWorld(tr, eye) {
     foam.offset.y -= dt * 4.5;
     stripes.offset.y += dt * 0.02;
   });
+
+  // Rapids whitewater: two layers of foam sitting on the wave crests (standing waves stay put,
+  // the foam churns and sloshes on them), and spray kicked up off every crest.
+  const crestLayers = [crestTexture(31), crestTexture(57)].map((tex, k) => {
+    tex.repeat.set(1.5 + k * 0.4, 1);
+    return {
+      tex,
+      mat: new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, opacity: 0.9 }),
+    };
+  });
+  for (const run of runs) {
+    if (run.kind !== 'rapids') continue;
+    const ids = fewer(run.ids);
+    if (ids.length < 2) continue;
+    crestLayers.forEach(({ mat: crestMat }, k) => {
+      const lift = 0.12 + k * 0.04;
+      const geo = tube(ids, (i) => centerR(i).addScaledVector(U(i), lift), D, side, RW - 0.04, {
+        sides: 12,
+        arc: 0.95,
+        uv: (i) => ((i - run.first) * tr.step - WAVE_LENGTH / 4) / WAVE_LENGTH + 0.5 + k * 0.08,
+      });
+      const mesh = new THREE.Mesh(geo, crestMat);
+      mesh.renderOrder = 2 + k;
+      g.add(mesh);
+    });
+  }
+  if (crests.length) {
+    const count = Math.min(600, crests.length * 30);
+    const posArr = new Float32Array(count * 3).fill(-1000);
+    const vel = Array.from({ length: count }, () => new THREE.Vector3());
+    const age = new Float32Array(count).fill(9);
+    const life = new Float32Array(count);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    const spray = new THREE.Points(geo, new THREE.PointsMaterial({ color: '#ffffff', size: 0.3, map: getDot(), transparent: true, depthWrite: false, opacity: 0.9 }));
+    spray.frustumCulled = false;
+    g.add(spray);
+    let next = 0;
+    let carry = 0;
+    updates.push((dt, time) => {
+      crestLayers.forEach(({ tex, mat: crestMat }, k) => {
+        tex.offset.x = time * (0.12 + k * 0.07) * (k ? -1 : 1);
+        tex.offset.y = 0.025 * Math.sin(time * (5 + k * 1.7) + k);
+        crestMat.opacity = 0.8 + 0.15 * Math.sin(time * (7 + k * 3));
+      });
+      // Kick up new droplets off random crests.
+      carry += dt * count * 1.4;
+      while (carry >= 1) {
+        carry -= 1;
+        const k = next;
+        next = (next + 1) % count;
+        const i = crests[Math.floor(Math.random() * crests.length)];
+        const at = floorR(i, (Math.random() - 0.5) * 2.6).addScaledVector(U(i), 0.15);
+        posArr.set([at.x, at.y, at.z], k * 3);
+        vel[k]
+          .copy(U(i))
+          .multiplyScalar(1.2 + Math.random() * 2.4)
+          .addScaledVector(T(i), (Math.random() - 0.3) * 1.6)
+          .addScaledVector(side(i), (Math.random() - 0.5) * 1.4);
+        age[k] = 0;
+        life[k] = 0.4 + Math.random() * 0.5;
+      }
+      for (let k = 0; k < count; k++) {
+        if (age[k] >= life[k]) {
+          posArr[k * 3 + 1] = -1000;
+          continue;
+        }
+        age[k] += dt;
+        vel[k].y -= 9.8 * dt;
+        posArr[k * 3] += vel[k].x * dt;
+        posArr[k * 3 + 1] += vel[k].y * dt;
+        posArr[k * 3 + 2] += vel[k].z * dt;
+      }
+      geo.attributes.position.needsUpdate = true;
+    });
+  }
 
   // Water jets on the climbs: nozzles on both walls, puffing spray up the slide.
   const jetIds = all.filter((i, k) => tr.lift[i] && !tr.bowlMask[i] && i <= lipEnd && k % 4 === 0);
@@ -463,75 +560,6 @@ export function makeSlideWorld(tr, eye) {
     }
     g.add(legMesh);
   }
-
-  // Trapdoor capsules: a glass booth with a dome, a metal ring, traffic-light lamps and a floor
-  // that opens, on a little deck with legs. The ride sets `lit` (0-3) and `open` (0 or 1).
-  const trapdoors = tr.trapdoors.map((t) => {
-    const base = P(t.capsule);
-    const tf = T(t.capsule);
-    const fwd = new THREE.Vector3(tf.x, 0, tf.z).normalize();
-    const across = new THREE.Vector3(-fwd.z, 0, fwd.x);
-    const cap = new THREE.Group();
-    cap.position.copy(base).addScaledVector(fwd, 0.6);
-    cap.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(across, Y_AXIS, fwd));
-    const R = 1.5;
-    const H = 3.2;
-    const floorY = -0.25;
-    const glassMat = new THREE.MeshPhongMaterial({ color: '#cdefff', transparent: true, opacity: 0.28, shininess: 120, specular: '#ffffff', side: THREE.DoubleSide, depthWrite: false });
-    const wall = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 28, 1, true), glassMat);
-    wall.position.y = floorY + H / 2;
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(R, 28, 10, 0, Math.PI * 2, 0, Math.PI / 2), glassMat);
-    dome.position.y = floorY + H;
-    wall.renderOrder = dome.renderOrder = 3;
-    const metal = shiny('#c9d1dc');
-    const rings = [floorY, floorY + H].map((y) => {
-      const r = new THREE.Mesh(new THREE.TorusGeometry(R + 0.04, 0.1, 8, 36), metal);
-      r.rotation.x = Math.PI / 2;
-      r.position.y = y;
-      return r;
-    });
-    const lampColors = ['#ff3b3b', '#ffd23f', '#3bd16f'];
-    const lamps = lampColors.map((col, k) => {
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(col).multiplyScalar(0.3) }));
-      lamp.position.set((k - 1) * 0.45, floorY + H + 0.05, R + 0.05);
-      lamp.userData.on = new THREE.Color(col);
-      lamp.userData.off = new THREE.Color(col).multiplyScalar(0.3);
-      return lamp;
-    });
-    // The floor: two half-disc doors meeting in the middle, swinging down to open.
-    const doorMat = new THREE.MeshPhongMaterial({ color: '#ffd23f', side: THREE.DoubleSide, shininess: 60 });
-    const doors = [1, -1].map((s) => {
-      const hinge = new THREE.Group();
-      hinge.position.y = floorY;
-      const door = new THREE.Mesh(new THREE.CircleGeometry(R - 0.05, 20, s > 0 ? -Math.PI / 2 : Math.PI / 2, Math.PI).rotateX(-Math.PI / 2), doorMat);
-      hinge.add(door);
-      hinge.userData.s = s;
-      return hinge;
-    });
-    // Deck around it and legs down to the ground.
-    const deckShape = new THREE.Shape();
-    deckShape.moveTo(-2.4, -2.4);
-    deckShape.lineTo(2.4, -2.4);
-    deckShape.lineTo(2.4, 2.4);
-    deckShape.lineTo(-2.4, 2.4);
-    deckShape.closePath();
-    deckShape.holes.push(new THREE.Path().absarc(0, 0, R + 0.05, 0, Math.PI * 2, true));
-    const deck = new THREE.Mesh(new THREE.ExtrudeGeometry(deckShape, { depth: 0.3, bevelEnabled: false }).rotateX(Math.PI / 2), mat('#d9a066'));
-    deck.position.y = floorY;
-    cap.add(wall, dome, ...rings, ...lamps, ...doors, deck);
-    for (const [x, z] of [[-2.2, -2.2], [2.2, -2.2], [-2.2, 2.2], [2.2, 2.2]]) {
-      const top = new THREE.Vector3(x, floorY - 0.3, z).applyMatrix4(cap.matrix.compose(cap.position, cap.quaternion, cap.scale));
-      g.add(posed(new THREE.Mesh(unitCyl, shiny('#f2f4f7')), beam(m, new THREE.Vector3(top.x, 0, top.z), top, 0.18)));
-    }
-    g.add(cap);
-    const state = { lit: 0, open: 0, lamps, doors, openNow: 0 };
-    updates.push((dt) => {
-      lamps.forEach((lamp, k) => lamp.material.color.copy(k < state.lit ? lamp.userData.on : lamp.userData.off));
-      state.openNow += (state.open - state.openNow) * Math.min(1, dt * 6);
-      for (const d of doors) d.rotation.z = -d.userData.s * state.openNow * 1.5;
-    });
-    return state;
-  });
 
   // The start: a tower with zigzag stairs, a striped canopy, a flag and a little start pool.
   const startTop = P(0).y;
@@ -843,7 +871,6 @@ export function makeSlideWorld(tr, eye) {
   return {
     group: g,
     pickups: ducks,
-    trapdoors,
     splash,
     tunnels,
     bowls: tr.bowls,

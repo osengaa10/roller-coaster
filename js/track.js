@@ -104,11 +104,11 @@ export function drawnLength(strokes, kind = 'coaster') {
 }
 
 // Evenly spaced points along a polyline (works for any dimension via keys).
-// Labels (crayon `c`, wobble `w`, and the slide's pool, bowl, rapids and trapdoor tags) ride along
+// Labels (crayon `c`, wobble `w`, and the slide's pool, bowl and rapids tags) ride along
 // un-interpolated: each segment takes its end point's labels, so the line joining two strokes
 // matches the new stroke. `lerp` fields are interpolated without counting toward distance.
 // A bowl marker is passed on to exactly one output point.
-const CARRY = ['c', 'w', 'pool', 'bp', 'bi', 'rp', 'tp'];
+const CARRY = ['c', 'w', 'pool', 'bp', 'bi', 'rp', 'rl'];
 export function resample(pts, spacing, keys = ['x', 'y'], lerp = []) {
   const clean = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
@@ -195,8 +195,7 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   const station = stationFor(kind);
   // 1. 2D path: station + drawing + the end (a flat brake run in whatever direction he was
   // heading, or for the slide a run down into the pool). The slide's tricks are shaped here:
-  // tight circles are cut out (they come back as toilet bowls in 3D), zigzags become rapids and
-  // straight-down lines become trapdoor drops.
+  // tight circles are cut out (they come back as toilet bowls in 3D) and zigzags become rapids.
   let path = pathFromStrokes(strokes, kind);
   if (slide) path = shapeSlide(path).path;
   const drawn = smoothByScale(smoothByScale(resample(path, 0.012), 0.012), 0.012);
@@ -220,13 +219,16 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   // spliced in where its circle was, and everything after it moves over to where it comes out.
   let z = 0;
   const shift = { x: 0, z: 0 };
+  const stretch = slide ? rapidsStretch(flat) : null;
   const bowlInfo = [];
   const pts3 = [];
   for (let i = 0; i < flat.length; i++) {
     const p = flat[i];
     if (i > 0) z += Math.max(0, flat[i - 1].x - p.x) * Z_DRIFT;
+    // Rapids from a narrow zigzag get stretched out to their proper length.
+    if (stretch && i > 0 && stretch[i] !== 1) shift.x += (p.x - flat[i - 1].x) * (stretch[i] - 1) * WORLD_SCALE;
     const q = { x: (p.x - station.x0) * WORLD_SCALE + shift.x, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE + shift.z, c: p.c ?? 0 };
-    if (slide) Object.assign(q, { hx: 0, hy: 1, hz: 0, hw: 0, rp: p.rp, tp: p.tp });
+    if (slide) Object.assign(q, { hx: 0, hy: 1, hz: 0, hw: 0, rp: p.rp });
     if (p.bowl && pts3.length) {
       let dir = dirX;
       for (let k = i - 2; k >= 0 && i - k < 40; k--) {
@@ -306,10 +308,8 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   const speed = new Float32Array(n);
   const lift = new Uint8Array(n);
   let v2 = prof.vMin * prof.vMin;
-  const capsules = slide ? capsuleIds(samples, tan) : [];
   for (let i = 0; i < n; i++) {
     if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * prof.friction * G * step;
-    if (capsules.includes(i)) v2 = 0; // the trapdoor drop starts from a standstill
     let v = Math.sqrt(Math.max(0, v2));
     const floor = liftSpeed(pos[i * 3 + 1], prof.vMin);
     if (v < floor) {
@@ -323,10 +323,6 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   for (let i = 0; i < n; i++) {
     const toEnd = length - i * step;
     speed[i] = Math.max(0.6, Math.min(speed[i], Math.sqrt(2 * prof.brakeDecel * toEnd)));
-  }
-  // Gliding to a stop in each trapdoor capsule.
-  for (const c of capsules) {
-    for (let i = Math.max(0, c - Math.round(10 / step)); i <= c; i++) speed[i] = Math.min(speed[i], 1 + Math.sqrt(6 * (c - i) * step));
   }
 
   // 5. Places to shout "wheee": the top of any big drop.
@@ -344,6 +340,25 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   const track = { kind, count: n, step, length, pos, tan, up, speed, lift, whee, rgb };
   if (slide) Object.assign(track, slideParts(samples, track, bowlInfo));
   return track;
+}
+
+// How much each rapids stretch is drawn out: its planned length (rl) over how far it actually
+// goes along x. 1 everywhere else.
+function rapidsStretch(flat) {
+  const out = new Float64Array(flat.length).fill(1);
+  for (let i = 0; i < flat.length; ) {
+    if (!flat[i].rp) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < flat.length && flat[j + 1].rp) j++;
+    const span = Math.abs(flat[j].x - flat[i].x);
+    const k = Math.max(1, Math.min(40, (flat[i].rl || span) / Math.max(span, 1e-3)));
+    for (let m = i + 1; m <= j; m++) out[m] = k;
+    i = j + 1;
+  }
+  return out;
 }
 
 // Rapids: little waves along the zigzag's stretch for the float to bounce over, eased in and out.
@@ -364,19 +379,6 @@ function addRapidsWaves(samples, step) {
     }
     i = j + 1;
   }
-}
-
-// Where each trapdoor capsule is: the flattest spot on the level stretch before its drop
-// (preferring the one nearest the edge).
-function capsuleIds(samples, tan) {
-  const out = [];
-  for (let i = 0; i + 1 < samples.length; i++) {
-    if (samples[i].tp !== 1 || samples[i + 1].tp !== 2) continue;
-    let best = i;
-    for (let k = i; k >= 0 && samples[k].tp === 1; k--) if (Math.abs(tan[k * 3 + 1]) < Math.abs(tan[best * 3 + 1]) - 0.05) best = k;
-    out.push(best);
-  }
-  return out;
 }
 
 // Bowl samples carry a hint for which way is up (hw = how much). Turn the regular frame toward
@@ -463,9 +465,9 @@ function slideParts(samples, track, bowlInfo) {
   }
   for (let i = 0; i < n; i++) if (samples[i].bp === 2 || i >= poolStart - Math.round(2 / step)) enclosed[i] = 0;
 
-  // Rapids and trapdoors. The capsule (and just past it) stays open: it has its own glass.
+  // Rapids.
   const special = new Uint8Array(n);
-  for (let i = 0; i < n; i++) special[i] = samples[i].tp ? 2 : samples[i].rp ? 1 : 0;
+  for (let i = 0; i < n; i++) special[i] = samples[i].rp ? 1 : 0;
   const rapids = [];
   for (let i = 0; i < n; ) {
     if (special[i] !== 1) {
@@ -477,15 +479,6 @@ function slideParts(samples, track, bowlInfo) {
     rapids.push([i, j]);
     i = j + 1;
   }
-  const trapdoors = capsuleIds(samples, track.tan).map((capsule) => {
-    let start = capsule;
-    while (start > 0 && samples[start - 1].tp === 1) start--;
-    let dropEnd = capsule + 1;
-    while (dropEnd + 1 < n && samples[dropEnd].tp !== 2) dropEnd++;
-    while (dropEnd + 1 < n && samples[dropEnd + 1].tp === 2) dropEnd++;
-    for (let i = start; i <= Math.min(n - 1, capsule + Math.round(1.5 / step)); i++) enclosed[i] = 0;
-    return { start, capsule, dropEnd };
-  });
 
   const mid = Math.round((poolStart + n - 1) / 2);
   const pool = {
@@ -494,7 +487,7 @@ function slideParts(samples, track, bowlInfo) {
     dir: { x: track.tan[mid * 3], z: track.tan[mid * 3 + 2] },
     length: (n - 1 - poolStart) * step,
   };
-  return { bowls, bowlMask, enclosed, pool, rapids, trapdoors, special };
+  return { bowls, bowlMask, enclosed, pool, rapids, special };
 }
 
 // Where to stand support pillars: one every few meters, from just under the track down to
@@ -523,7 +516,7 @@ export function supportSpots(track) {
   for (let i = 0; i < n; i += Math.max(1, Math.round(POLE_EVERY / step))) {
     // Only under upright track: in loops and other inversions "under the spine" points sideways
     // or up, and a column there would hold nothing. Loops hold themselves up.
-    if (up[i * 3 + 1] < UPRIGHT || pos[i * 3 + 1] > SUPPORT_MAX || track.bowlMask?.[i] || track.special?.[i] === 2) continue;
+    if (up[i * 3 + 1] < UPRIGHT || pos[i * 3 + 1] > SUPPORT_MAX || track.bowlMask?.[i]) continue;
     const base = {
       x: pos[i * 3] - up[i * 3] * 0.6,
       y: pos[i * 3 + 1] - up[i * 3 + 1] * 0.6,
@@ -585,7 +578,7 @@ export function starSpots(track) {
   const every = Math.max(STAR_EVERY, (b - a) * track.step / MAX_STARS); // giant coasters: at most MAX_STARS
   for (let i = a; i <= b; i += Math.max(1, Math.round(every / track.step))) {
     // Slide: no ducks in a bowl or bobbing upside down.
-    if (track.bowlMask?.[i] || track.special?.[i] === 2 || (track.kind === 'slide' && track.up[i * 3 + 1] < 0.3)) continue;
+    if (track.bowlMask?.[i] || (track.kind === 'slide' && track.up[i * 3 + 1] < 0.3)) continue;
     out.push(i);
   }
   return out;

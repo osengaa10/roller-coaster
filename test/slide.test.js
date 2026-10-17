@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTrack, pathFromStrokes, starSpots, supportSpots, tunnelRuns, SLIDE_V_MIN, liftSpeed, STATIONS } from '../js/track.js';
-import { findBowls, cutBowls, funnelY, findDrops, findRapids, shapeSlide } from '../js/slide.js';
+import { findBowls, cutBowls, funnelY, findRapids, shapeSlide } from '../js/slide.js';
 
 const stroke = (f, n = 120) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
 const W = 0.03; // finger wobble at normal zoom on an iPad (20 px in track units)
@@ -160,29 +160,11 @@ test('the coaster is unchanged by the slide code', () => {
   assert.ok(Math.min(...Array.from({ length: tr.count }, (_, i) => tr.up[i * 3 + 1])) < -0.8, 'a circle is a loop');
 });
 
-// --- Trapdoor drops and rapids ----------------------------------------------------------------
+// --- Rapids ----------------------------------------------------------------
 
-const upThenDrop = (w = W) => [...line(0.25, 0.3, 0.5, 0.5, w), ...line(0.5, 0.5, 0.51, 0.1, w), ...line(0.51, 0.1, 1.2, 0.1, w)];
 const zigzag = (x0 = 0.6, w = W) => stroke((t) => ({ x: x0 + t * 0.6, y: 0.2 + 0.06 * Math.sin(t * Math.PI * 10), w }), 240);
 const withRapids = () => [...line(0.25, 0.3, 0.6, 0.2), ...zigzag(), ...line(1.2, 0.2, 1.6, 0.1)];
 const shaped = (pts) => shapeSlide(pathFromStrokes([pts], 'slide'));
-
-test('a line straight down is a trapdoor drop; a slope or a little tick is not', () => {
-  assert.equal(shaped(upThenDrop()).drops.length, 1);
-  const slope = [...line(0.25, 0.3, 0.5, 0.5), ...line(0.5, 0.5, 0.9, 0.1), ...line(0.9, 0.1, 1.2, 0.1)];
-  const tick = [...line(0.25, 0.3, 0.5, 0.3), ...line(0.5, 0.3, 0.5, 0.24), ...line(0.5, 0.24, 1.2, 0.24)];
-  assert.equal(shaped(slope).drops.length, 0);
-  assert.equal(shaped(tick).drops.length, 0);
-  // Drawn 10x zoomed out it has to be 10x taller, just as it looks on screen.
-  const big = [...line(0.25, 0.3, 2, 3, W * 10), ...line(2, 3, 2.05, 1.2, W * 10), ...line(2.05, 1.2, 4, 1.2, W * 10)];
-  assert.equal(shaped(big).drops.length, 1);
-  assert.equal(findDrops(pathFromStrokes([big.map((p) => ({ ...p, w: W }))], 'slide')).length, 1, 'tall enough either way');
-});
-
-test('a big loop is not a trapdoor drop', () => {
-  const big = [...line(0.25, 0.3, 0.8, 0.1), ...circle(1.1, 0.4, 0.3), ...line(1.1, 0.1, 2, 0.1)];
-  assert.equal(shaped(big).drops.length, 0);
-});
 
 test('a zigzag is rapids; a hill, a big S-curve and a tight circle are not', () => {
   assert.equal(shaped(withRapids()).rapids.length, 1);
@@ -198,26 +180,6 @@ test('a tight circle next to a zigzag makes one bowl and one rapids', () => {
   assert.equal(sh.rapids.length, 1);
 });
 
-test('a trapdoor: the raft glides to a stop on a level spot, then plunges straight down', () => {
-  const tr = buildTrack([upThenDrop()], { kind: 'slide' });
-  assertFinite(tr);
-  assert.equal(tr.trapdoors.length, 1);
-  const { capsule, dropEnd } = tr.trapdoors[0];
-  assert.ok(Math.abs(tr.tan[capsule * 3 + 1]) < 0.15, 'capsule is level');
-  assert.ok(tr.speed[capsule] <= 2, 'slow at the capsule');
-  let vertical = false;
-  for (let i = capsule; i < capsule + 8 / tr.step; i++) vertical ||= tr.tan[i * 3 + 1] < -0.9;
-  assert.ok(vertical, 'straight down right after the capsule');
-  assert.ok(tr.speed[dropEnd] > 10, `fast at the bottom: ${tr.speed[dropEnd]}`);
-  assert.equal(tr.enclosed[capsule], 0, 'the capsule has its own glass');
-  assert.ok(tr.enclosed[Math.round((capsule + dropEnd) / 2)], 'the drop is a closed tube');
-  for (let i = 1; i < tr.count; i++) {
-    const [a, c] = [P(tr, i - 1), P(tr, i)];
-    assert.ok(Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2]) < tr.step * 2, `position jumps at ${i}`);
-  }
-  assert.ok(starSpots(tr).every((i) => tr.special[i] !== 2), 'no ducks in the capsule or the drop');
-});
-
 test('rapids: a bumpy stretch of little waves, with no cave in it', () => {
   const tr = buildTrack([withRapids()], { kind: 'slide' });
   assertFinite(tr);
@@ -225,14 +187,21 @@ test('rapids: a bumpy stretch of little waves, with no cave in it', () => {
   const [a, b] = tr.rapids[0];
   let turns = 0;
   let dir = 0;
-  let base = tr.pos[a * 3 + 1];
+  // The rapids run gently downhill (peak to dip of the zigzag); the waves ride on that slope.
+  // Measured away from the ends, which blend into the zigzag either side.
+  const inner = (i) => i > a + (b - a) * 0.15 && i < b - (b - a) * 0.15;
+  const ids = Array.from({ length: b - a + 1 }, (_, k) => a + k).filter(inner);
+  const mx = ids.reduce((t, i) => t + i, 0) / ids.length;
+  const my = ids.reduce((t, i) => t + tr.pos[i * 3 + 1], 0) / ids.length;
+  const k = ids.reduce((t, i) => t + (i - mx) * (tr.pos[i * 3 + 1] - my), 0) / ids.reduce((t, i) => t + (i - mx) ** 2, 0);
+  const slope = (i) => my + k * (i - mx);
   for (let i = a + 1; i <= b; i++) {
     const d = Math.sign(tr.pos[i * 3 + 1] - tr.pos[(i - 1) * 3 + 1]);
     if (d && d !== dir) {
       turns++;
       dir = d;
     }
-    assert.ok(Math.abs(tr.pos[i * 3 + 1] - base) < 1.5, 'waves stay small');
+    if (inner(i)) assert.ok(Math.abs(tr.pos[i * 3 + 1] - slope(i)) < 0.6, 'waves stay small');
   }
   assert.ok(turns >= 6, `bounces up and down (${turns} turns)`);
   for (const [c, d] of tunnelRuns(tr)) assert.ok(d < a || c > b, 'no cave in the rapids');
@@ -242,8 +211,80 @@ test('rapids: a bumpy stretch of little waves, with no cave in it', () => {
   }
 });
 
-test('the coaster ignores zigzags and straight drops', () => {
-  const tr = buildTrack([[...upThenDrop(), ...zigzag(1.3), ...line(1.9, 0.2, 2.2, 0.1)]]);
+test('only the middle of a zigzag becomes rapids: its first and last turns stay zigzag', () => {
+  const zig = vs([[0.5, 0.25], [0.58, 0.08], [0.66, 0.25], [0.74, 0.08], [0.82, 0.25], [0.9, 0.08], [0.98, 0.25], [1.4, 0.25]]);
+  const sh = shaped([...line(0.25, 0.3, 0.5, 0.25), ...zig]);
+  assert.equal(sh.rapids.length, 1);
+  const flat = sh.path.filter((p) => p.rp);
+  const xs = flat.map((p) => p.x);
+  assert.ok(Math.min(...xs) > 0.57 && Math.max(...xs) < 0.99, 'the outer V\'s are left alone');
+  // The first V is still there in the 3D slide: it goes down and back up before the rapids.
+  const tr = buildTrack([[...line(0.25, 0.3, 0.5, 0.25), ...zig]], { kind: 'slide' });
+  const [a] = tr.rapids[0];
+  const ys = Array.from({ length: a }, (_, i) => tr.pos[i * 3 + 1]);
+  const low = Math.min(...ys.slice(Math.floor(a / 2)));
+  assert.ok(ys[a - 1] - low > 3, 'climbs back out of a zigzag dip just before the rapids');
+});
+
+test('a tall, narrow zigzag (like a quick scribble up and down) makes rapids of a good length', () => {
+  // About 40 px across but 230 px tall on an iPad, wobbling back and forth a little.
+  const scribble = finger([[0.62, 0.15], [0.68, 0.5], [0.66, 0.17], [0.7, 0.48], [0.67, 0.18], [0.71, 0.47], [0.69, 0.16], [0.72, 0.45], [0.7, 0.15], [1.2, 0.15]]);
+  const pts = [...finger([[0.25, 0.3], [0.6, 0.15]]), ...scribble];
+  assert.equal(shaped(pts).bowls.length, 0, 'not a toilet bowl');
+  assert.equal(shaped(pts).rapids.length, 1);
+  const tr = buildTrack([pts], { kind: 'slide' });
+  const [a, b] = tr.rapids[0];
+  assert.ok((b - a) * tr.step >= 12, `rapids ${((b - a) * tr.step).toFixed(1)} m long`);
+  for (let i = 1; i < tr.count; i++) {
+    const [p, q] = [P(tr, i - 1), P(tr, i)];
+    assert.ok(Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < tr.step * 2, `position jumps at ${i}`);
+  }
+});
+
+test('the coaster ignores zigzags', () => {
+  const tr = buildTrack([[...line(0.25, 0.1, 0.6, 0.2), ...zigzag(), ...line(1.2, 0.2, 1.6, 0.1)]]);
   assert.equal(tr.rapids, undefined);
-  assert.equal(tr.trapdoors, undefined);
+});
+
+// Zigzags the way a finger draws them: a few sharp V's, each about as wide as it is tall.
+const vs = (pts) => pts.slice(1).flatMap((q, k) => line(pts[k][0], pts[k][1], q[0], q[1]));
+
+test('a tight finger zigzag is rapids, even only a couple of V\'s; a spread-out one is not', () => {
+  const tight = vs([[0.5, 0.25], [0.65, 0.1], [0.8, 0.28], [0.95, 0.1], [1.1, 0.27], [1.25, 0.12], [1.6, 0.12]]);
+  const few = vs([[0.5, 0.25], [0.65, 0.08], [0.8, 0.25], [0.95, 0.08], [1.1, 0.25], [1.4, 0.25]]);
+  const wide = vs([[0.5, 0.3], [0.8, 0.1], [1.1, 0.3], [1.4, 0.1], [1.7, 0.3], [2.0, 0.12]]);
+  for (const [name, pts] of Object.entries({ tight, few })) assert.equal(shaped([...line(0.25, 0.3, 0.5, 0.25), ...pts]).rapids.length, 1, name);
+  assert.equal(shaped([...line(0.25, 0.3, 0.5, 0.3), ...wide]).rapids.length, 0, 'wide');
+});
+
+// Finger-like points (~6 px apart) along straight pieces.
+const finger = (pts) =>
+  pts.slice(1).flatMap((q, k) => {
+    const p = pts[k];
+    const n = Math.max(2, Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1]) / 0.009));
+    return Array.from({ length: n }, (_, i) => ({ x: p[0] + (q[0] - p[0]) * (i / n), y: p[1] + (q[1] - p[1]) * (i / n), w: W }));
+  });
+
+test('sharp up-and-down zigzags never turn into toilet bowls', () => {
+  // Nearly straight up and down, leaning a little differently each time: these used to add up
+  // to a full "circle" and become a bowl.
+  const zig = finger([[0.3, 0.3], [0.528, 0.08], [0.59, 0.28], [0.618, 0.08], [0.618, 0.28], [0.613, 0.08], [0.666, 0.28], [1.076, 0.2]]);
+  const sh = shaped(zig);
+  assert.equal(sh.bowls.length, 0);
+  assert.equal(sh.rapids.length, 1);
+});
+
+test('starting a line a bit above and behind the tower does not make a toilet bowl', () => {
+  // The slide joins the tower's end to wherever he first touches, then he swoops down.
+  for (const start of [[0.12, 0.33], [0.15, 0.34], [0.18, 0.32], [0.1, 0.36]]) {
+    const pts = finger([start, [0.5, 0.12], [1.3, 0.1]]);
+    assert.equal(findBowls(pathFromStrokes([pts], 'slide')).length, 0, String(start));
+  }
+  assert.equal(bowlsIn(withBowl()).length, 1, 'a real tight circle still is one');
+  assert.equal(bowlsIn(withBowl(2))[0].turns, 2, 'and going round twice still counts twice');
+});
+
+test('gentle rolling bumps stay ordinary hills', () => {
+  const bumps = stroke((t) => ({ x: 0.3 + t * 1.6, y: 0.15 + 0.04 * Math.sin(t * Math.PI * 8), w: W }), 400);
+  assert.equal(shaped(bumps).rapids.length, 0);
 });

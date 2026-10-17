@@ -73,7 +73,7 @@ export class DrawPad {
     this.active = true;
     this.mode = 'coaster';
     this.sessions = {}; // per game: its strokes, undo history and view
-    this.found = null; // water slide: bowls, rapids and drops found in the drawing (cached; see slideShape)
+    this.found = null; // water slide: bowls and rapids found in the drawing (cached; see slideShape)
 
     this.resize();
     this.fitView();
@@ -123,8 +123,8 @@ export class DrawPad {
     this.dirty = true;
   }
 
-  // The water slide's tricks: tight circles become toilet bowls, zigzags rapids, and lines
-  // straight down trapdoor drops. Found once a line is finished; while a line is being drawn only
+  // The water slide's tricks: tight circles become toilet bowls and zigzags rapids.
+  // Found once a line is finished; while a line is being drawn only
   // points are added at the end, so the ones found stay valid and are just reapplied.
   slideShape(path) {
     const shape = shapeSlide(path, this.found);
@@ -141,7 +141,6 @@ export class DrawPad {
     const more = (k) => now[k].length > (before ? before[k].length : 0);
     if (more('bowls')) sound.swirl();
     if (more('rapids')) sound.splash();
-    if (more('drops')) sound.trapdoor();
   }
 
   resize() {

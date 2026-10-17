@@ -444,38 +444,6 @@ export function fountain() {
   src.stop(t + 1);
 }
 
-// Countdown in the trapdoor capsule: beep... beep... BEEP! (n = 0, 1, 2)
-export function beep(n = 0) {
-  if (!ready()) return;
-  const t = ctx.currentTime;
-  const last = n >= 2;
-  tone(last ? 1320 : 660, t, last ? 0.45 : 0.22, { type: 'square', vol: 0.12 });
-  tone(last ? 1320 : 660, t, last ? 0.45 : 0.22, { vol: 0.15 });
-}
-
-// The trapdoor opening: a metal clunk, a hiss of air, and a falling whoosh.
-export function trapdoor() {
-  if (!ready()) return;
-  const t = ctx.currentTime;
-  tone(140, t, 0.18, { type: 'triangle', vol: 0.45, to: 70 });
-  noise(t, 0.08, { freq: 2200, q: 3, vol: 0.5 });
-  noise(t + 0.05, 0.35, { freq: 5000, q: 0.8, vol: 0.18 });
-  const src = ctx.createBufferSource();
-  src.buffer = noiseBuffer;
-  const f = ctx.createBiquadFilter();
-  f.type = 'bandpass';
-  f.Q.value = 1.5;
-  f.frequency.setValueAtTime(2600, t + 0.1);
-  f.frequency.exponentialRampToValueAtTime(220, t + 1.1);
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, t + 0.1);
-  g.gain.exponentialRampToValueAtTime(0.5, t + 0.25);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
-  src.connect(f).connect(g).connect(master);
-  src.start(t + 0.1, Math.random());
-  src.stop(t + 1.3);
-}
-
 // Bouncing through the rapids: a splash with a bubbly gurgle.
 export function rapids() {
   if (!ready()) return;
