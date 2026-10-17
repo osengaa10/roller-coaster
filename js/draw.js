@@ -16,6 +16,8 @@ const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows whe
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
 const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the left or right side
+const EDGE_DWELL = 0.3; // seconds his finger must stay right at the edge before the view moves
+const PINCH_BEFORE = 15; // a second finger only starts a pinch while the line is shorter than this
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
 // The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
@@ -65,6 +67,8 @@ export class DrawPad {
     this.zoom = 1;
     this.panX = 0; // track x at the left edge of the screen
     this.edgeHold = 0; // seconds the finger has been held against the top
+    this.edgeWait = 0; // seconds the finger has been at an edge, before it starts moving the view
+    this.zoomedOut = false; // this line zoomed the view out (so it may zoom back in as it comes down)
     this.dirty = true;
     this.active = true;
     this.mode = 'coaster';
@@ -194,6 +198,9 @@ export class DrawPad {
   down(e) {
     e.preventDefault();
     sound.unlock();
+    // Once he's really drawing, another touch (his other hand, a palm) is ignored, so the line
+    // keeps following his finger instead of turning into a pinch.
+    if (this.pointerId !== null && this.strokes[this.strokes.length - 1].p.length >= PINCH_BEFORE) return;
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this.pointers.size === 2) return this.startPinch();
     if (this.pointerId !== null || this.pinch || this.waitForLift) return; // ignore extra fingers
@@ -207,6 +214,8 @@ export class DrawPad {
     const p = this.toTrack(e.clientX, e.clientY);
     this.strokes.push({ c: this.color, p: [p] });
     this.lastScreen = { x: e.clientX, y: e.clientY };
+    this.edgeWait = 0;
+    this.zoomedOut = false;
     sound.drawStart(p.y, this.mode === 'slide');
     this.dirty = true;
   }
@@ -242,8 +251,10 @@ export class DrawPad {
     this.onChange();
   }
 
+  // Only the very edge of the screen moves the view (about 16 px on an iPad), so drawing close
+  // to an edge, or doubling back near one, doesn't.
   get edgeBand() {
-    return Math.max(28, Math.min(this.w, this.h) * 0.07);
+    return Math.max(10, Math.min(this.w, this.h) * 0.02);
   }
 
   atTop() {
@@ -254,6 +265,7 @@ export class DrawPad {
   // the top zooms out (up toward space), the sides scroll along at the same size
   // (the left side only until the station is back in view).
   // The finger stays put while the world moves under it, so the track grows that way.
+  // It only starts after he's held his finger at the edge for a moment.
   edgeMove(dt) {
     if (this.pointerId === null || !this.lastScreen) return;
     const { x, y } = this.lastScreen;
@@ -261,10 +273,16 @@ export class DrawPad {
     const right = x >= this.w - this.edgeBand;
     const left = x <= this.left + this.edgeBand && this.panX > 0;
     if (!top) this.edgeHold = 0;
-    if (!top && !right && !left) return;
+    if (!top && !right && !left) {
+      this.edgeWait = 0;
+      return;
+    }
+    this.edgeWait += dt;
+    if (this.edgeWait < EDGE_DWELL) return;
     let zoom = this.zoom;
     if (top && zoom > MIN_ZOOM) {
       this.edgeHold += dt;
+      this.zoomedOut = true;
       zoom *= Math.exp(-EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45) * dt);
     }
     const side = right ? 1 : left ? -1 : 0;
@@ -280,9 +298,10 @@ export class DrawPad {
   }
 
   // Coming back down from a giant hill, the view zooms back in around the finger, so whatever
-  // he draws next near the ground (a loop, a little hill) comes out normal size.
+  // he draws next near the ground (a loop, a little hill) comes out normal size. Only after this
+  // line zoomed out against the top: otherwise the view stays put under his finger.
   settleZoom(dt) {
-    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atTop()) return;
+    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atTop() || !this.zoomedOut) return;
     const stroke = this.strokes[this.strokes.length - 1].p;
     const pen = stroke[stroke.length - 1];
     const target = Math.min(1, 0.5 / Math.max(pen.y, 0.01)); // keep the pen around mid-sky
@@ -300,7 +319,7 @@ export class DrawPad {
       const stroke = this.strokes[this.strokes.length - 1];
       this.pointerId = null;
       sound.drawStop();
-      if (stroke.p.length < 15) {
+      if (stroke.p.length < PINCH_BEFORE) {
         this.strokes.pop();
         this.history.pop();
       }
