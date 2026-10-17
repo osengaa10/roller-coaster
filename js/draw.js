@@ -11,7 +11,8 @@ const WOBBLE_PX = 20; // finger wobble smoothed away on screen; stored per point
 const SUPPORT_TOP = 7.5; // normalized (300 m): no supports drawn above this, same as the ride
 const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows when zoomed way out
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
-const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the edge
+const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
+const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the right side
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
 // The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
@@ -60,7 +61,7 @@ export class DrawPad {
     this.waitForLift = false; // after a pinch, ignore the leftover finger until all are lifted
     this.zoom = 1;
     this.panX = 0; // track x at the left edge of the screen
-    this.edgeHold = 0; // seconds the finger has been held against an edge
+    this.edgeHold = 0; // seconds the finger has been held against the top
     this.dirty = true;
     this.active = true;
 
@@ -77,7 +78,7 @@ export class DrawPad {
       const dt = Math.max(0, Math.min(0.05, (t - last) / 1000));
       last = t;
       if (this.active) {
-        this.edgeZoom(dt);
+        this.edgeMove(dt);
         this.settleZoom(dt);
         if (this.dirty) this.render();
         this.animateHand(t);
@@ -199,24 +200,31 @@ export class DrawPad {
     this.onChange();
   }
 
-  // Holding a line against the right or top edge zooms out. The finger stays put while the world
-  // shrinks under it, so the track keeps growing that way and the whole coaster stays in view.
-  atEdge() {
-    const band = Math.max(28, Math.min(this.w, this.h) * 0.07);
-    const { x, y } = this.lastScreen;
-    return x >= this.w - band || y <= band;
+  get edgeBand() {
+    return Math.max(28, Math.min(this.w, this.h) * 0.07);
   }
 
-  edgeZoom(dt) {
-    if (this.pointerId === null || !this.lastScreen || this.zoom <= MIN_ZOOM) return;
+  atTop() {
+    return this.lastScreen.y <= this.edgeBand;
+  }
+
+  // Holding a line against an edge keeps the track going that way:
+  // the top zooms out (up toward space), the right side scrolls along at the same size.
+  // The finger stays put while the world moves under it, so the track grows that way.
+  edgeMove(dt) {
+    if (this.pointerId === null || !this.lastScreen) return;
     const { x, y } = this.lastScreen;
-    if (!this.atEdge()) {
-      this.edgeHold = 0;
-      return;
+    const top = this.atTop();
+    const right = x >= this.w - this.edgeBand;
+    if (!top) this.edgeHold = 0;
+    if (!top && !right) return;
+    let zoom = this.zoom;
+    if (top && zoom > MIN_ZOOM) {
+      this.edgeHold += dt;
+      zoom *= Math.exp(-EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45) * dt);
     }
-    this.edgeHold += dt;
-    const rate = EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45);
-    this.setView(this.zoom * Math.exp(-rate * dt), this.panX);
+    const scroll = right ? (EDGE_SCROLL * (this.w - this.left) * dt) / (this.groundY * zoom) : 0;
+    this.setView(zoom, this.panX + scroll);
     const stroke = this.strokes[this.strokes.length - 1].p;
     const p = this.toTrack(x, y);
     const prev = stroke[stroke.length - 1];
@@ -229,7 +237,7 @@ export class DrawPad {
   // Coming back down from a giant hill, the view zooms back in around the finger, so whatever
   // he draws next near the ground (a loop, a little hill) comes out normal size.
   settleZoom(dt) {
-    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atEdge()) return;
+    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atTop()) return;
     const stroke = this.strokes[this.strokes.length - 1].p;
     const pen = stroke[stroke.length - 1];
     const target = Math.min(1, 0.5 / Math.max(pen.y, 0.01)); // keep the pen around mid-sky

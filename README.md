@@ -6,7 +6,7 @@ A roller coaster game for little kids (built for a 4-year-old on an iPad).
 2. Tap the big green **▶** button.
 3. **Ride it** in first person with an animal friend (a different one each time), then ride again or draw a new one.
 
-**Hold the line against the right or top edge** and the view zooms out while the track keeps going that way, so the whole coaster always fits. Keep going up and the sky turns into outer space, with stars, the moon and planets, and the ride climbs up there too.
+**Hold the line against the top edge** and the view zooms out while the track keeps climbing; keep going and the sky turns into outer space (stars, the moon, planets, the curve of the Earth). Coming back down, the view zooms back in so loops and hills near the ground are normal size. **Hold it against the right side** and the drawing scrolls along so the track keeps going.
 
 Things that happen on their own during the ride:
 - **Stars** float along the track. Fly through them to collect them, then count them at the end.
@@ -14,7 +14,7 @@ Things that happen on their own during the ride:
 - A **splash pond** appears at the bottom of the biggest drop.
 - **Fireworks** go off at the finish.
 
-**Tap anywhere** during the ride to throw your hands up. Tap the **eye** button to watch the train from outside, and tap it again to get back in the front seat.
+**Tap anywhere** during the ride to throw your hands up. Rides start watching the train from outside; tap the **seat** button to ride in the front seat (and the **eye** button to go back outside).
 
 No reading needed, no menus, and nothing can go wrong: the train never gets stuck, lifting your finger and drawing again just keeps adding track, and undo can even bring back a cleared drawing.
 
@@ -25,7 +25,7 @@ No reading needed, no menus, and nothing can go wrong: the train never gets stuc
 | 🗑 (orange) | Start over (undo brings it back) |
 | Crayons (top-left) | Pick the track color |
 | 🏠 (purple, during ride) | Back to drawing |
-| 👁 / seat (blue, during ride) | Watch from outside / back to the front seat |
+| seat / 👁 (blue, during ride) | Ride in the front seat / watch from outside |
 | ⟳ / ✏️ (after ride) | Ride again / draw again |
 
 ## Play on an iPad or iPhone

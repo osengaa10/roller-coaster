@@ -67,7 +67,7 @@ export class Ride {
     this.friendKind = null;
 
     this.effects = new Effects(this.scene);
-    this.mode = 'seat';
+    this.mode = 'outside'; // start watching the train from outside; the eye button switches to the front seat
     this.world = null;
     this.running = false;
     this.camUp = new THREE.Vector3(0, 1, 0);

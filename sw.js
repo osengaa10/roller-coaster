@@ -1,5 +1,5 @@
 // Network first so updates show up right away; fall back to the cache when offline.
-const CACHE = 'coaster-doodle-v10';
+const CACHE = 'coaster-doodle-v11';
 const SHELL = [
   './',
   'index.html',
