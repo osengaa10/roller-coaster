@@ -1,7 +1,7 @@
 // The water slide's drawing screen: a beach with the sea behind, a slide tower, the slide itself
 // (tight circles shown as toilet bowls) and a peek at the splash pool at the end.
 import { cssColor, stationFor } from './track.js';
-import { cutBowls, slideRunout } from './slide.js';
+import { slideRunout } from './slide.js';
 import { cloud, roundRect } from './draw.js';
 
 const SUPPORT_TOP = 7.5; // normalized, same as the coaster: no poles drawn above this
@@ -178,10 +178,11 @@ function starfish(ctx, x, y, r) {
 }
 
 // The slide: a fat trough in his crayon colors with water running down the middle, white poles
-// underneath, each tight circle drawn as a toilet bowl, and the run down into the pool.
-export function paintSlide(pad, path, bowls) {
+// underneath, and the run down into the pool. Its tricks (from shapeSlide) are drawn too:
+// toilet bowls, rapids and trapdoor capsules.
+export function paintSlide(pad, path, shape) {
   const { ctx, groundY, k } = pad;
-  const cut = cutBowls(path, bowls);
+  const { path: cut, bowls, rapids, drops } = shape;
   const pts = cut.map((p) => ({ ...pad.toScreen(p), c: p.c, high: p.y > SUPPORT_TOP }));
 
   // Where it ends: a dotted swoop down to the pool.
@@ -284,7 +285,97 @@ export function paintSlide(pad, path, bowls) {
   ctx.stroke();
   ctx.setLineDash([]);
 
+  for (const r of rapids) paintRapids(pad, cut.slice(r.i0, r.i1 + 1));
+  for (const d of drops) if (cut[d.i0]) paintCapsule(pad, cut[d.i0]);
   for (const b of bowls) paintBowl(pad, b, cssColor(path[b.i1].c, 0));
+}
+
+// Rapids: a wide foamy channel with rocks along both banks and white waves to bounce over.
+function paintRapids(pad, pts) {
+  const { ctx, k } = pad;
+  if (pts.length < 2) return;
+  const sp = pts.map((p) => pad.toScreen(p));
+  const line = () => {
+    ctx.beginPath();
+    sp.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  };
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  line();
+  ctx.strokeStyle = '#7d8aa0';
+  ctx.lineWidth = Math.max(12, 34 * k);
+  ctx.stroke();
+  line();
+  ctx.strokeStyle = '#7fd8f5';
+  ctx.lineWidth = Math.max(9, 26 * k);
+  ctx.stroke();
+  // Along the channel: white wave bumps on top and rocks on both banks.
+  let along = 0;
+  let next = 0;
+  for (let i = 1; i < sp.length; i++) {
+    const a = sp[i - 1];
+    const b = sp[i];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    along += seg;
+    if (along < next || seg < 1e-6) continue;
+    next = along + Math.max(10, 22 * k);
+    const nx = -(b.y - a.y) / seg;
+    const ny = (b.x - a.x) / seg;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y - 3 * k, Math.max(3, 7 * k), Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = '#e8f8ff';
+    ctx.beginPath();
+    ctx.arc(b.x + 6 * k, b.y + 4 * k, Math.max(1.5, 3.5 * k), 0, Math.PI * 2);
+    ctx.fill();
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = s > 0 ? '#8d8f94' : '#a39a8e';
+      ctx.beginPath();
+      ctx.ellipse(b.x + nx * s * 17 * k, b.y + ny * s * 17 * k, Math.max(3, 7 * k), Math.max(2, 5 * k), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// The trapdoor capsule at the top of a straight drop: a glass booth on legs, with a dome, a
+// metal ring and traffic-light lamps.
+function paintCapsule(pad, top) {
+  const { ctx, groundY, k } = pad;
+  const c = pad.toScreen(top);
+  const w = Math.max(16, 34 * k);
+  const h = Math.max(22, 50 * k);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(2, 4 * k);
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(c.x + s * w * 0.45, c.y + 6 * k);
+    ctx.lineTo(c.x + s * w * 0.6, groundY + 4);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#d9a066';
+  ctx.fillRect(c.x - w * 0.75, c.y + 4 * k, w * 1.5, Math.max(3, 6 * k));
+  ctx.fillStyle = 'rgba(200,240,255,0.55)';
+  ctx.strokeStyle = 'rgba(80,120,160,0.8)';
+  ctx.lineWidth = Math.max(1.5, 3 * k);
+  ctx.beginPath();
+  ctx.moveTo(c.x - w / 2, c.y + 4 * k);
+  ctx.lineTo(c.x - w / 2, c.y - h);
+  ctx.arc(c.x, c.y - h, w / 2, Math.PI, 0);
+  ctx.lineTo(c.x + w / 2, c.y + 4 * k);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillRect(c.x - w * 0.32, c.y - h, Math.max(2, 4 * k), h * 0.8);
+  ctx.fillStyle = '#9aa6bd';
+  ctx.fillRect(c.x - w / 2 - 2 * k, c.y - h - 2 * k, w + 4 * k, Math.max(3, 6 * k));
+  ['#ff3b3b', '#ffd23f', '#3bd16f'].forEach((col, i) => {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(c.x + (i - 1) * w * 0.28, c.y - h + 1 * k, Math.max(2, 4 * k), 0, Math.PI * 2);
+    ctx.fill();
+  });
 }
 
 // A toilet bowl, seen from the side: a wide rim, a funnel narrowing to the drain, a swirl inside.

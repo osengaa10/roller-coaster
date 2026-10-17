@@ -511,6 +511,40 @@ canvas {
   }
 }
 
+/* The trapdoor countdown: 3, 2, 1 popping up big in the middle of the screen. */
+#countdown {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  pointer-events: none;
+  font: 900 clamp(90px, 30vmin, 260px) / 1 system-ui, sans-serif;
+  color: #fff;
+  text-shadow: 0 6px 0 #3a86ff, 0 12px 24px rgba(0, 0, 0, 0.35);
+}
+#countdown.show {
+  display: grid;
+  animation: count 0.9s cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+@keyframes count {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  25% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  80% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.3);
+    opacity: 0;
+  }
+}
+
 /* Water slide: sandy and sea-blue instead of sky-blue. */
 body[data-mode='slide'] {
   background: #3fc1ff;

@@ -15,6 +15,9 @@ const RAFT_EYE = 0.95; // sitting low in a ring float
 const LOOK_AHEAD = 6; // meters
 const START_DELAY = 1.3; // seconds sitting in the station before rolling
 const CAR_GAP = 2.7; // meters between train cars
+const HOLD = 3.4; // seconds in the trapdoor capsule: 3, 2, 1, then the floor opens
+const COUNT_AT = [0.3, 1.3, 2.3]; // when each number shows
+const OPEN_AT = 3.0;
 // Sky colors (overhead / at the horizon), for day and for the sunset at the finish. The water
 // park's sky is a little more tropical turquoise.
 const SKIES = {
@@ -59,6 +62,7 @@ export class Ride {
     this.camera.add(this.streaks.lines);
     this.speedfx = document.getElementById('speedfx');
     this.drips = document.getElementById('drips');
+    this.countdown = document.getElementById('countdown');
     this.fovBoost = 0;
 
     // Front-seat view: the car nose (or his ring float) and his own arms hang off the camera.
@@ -168,6 +172,12 @@ export class Ride {
     this.nextBowl = 0;
     this.nextDrain = 0;
     this.pooled = false;
+    this.nextTrap = 0;
+    this.hold = 0;
+    this.holdTrap = null;
+    this.resumeAt = -Infinity;
+    this.inRapids = false;
+    this.lastRapids = -1;
     this.lastJet = -1;
     this.raftYaw = 0;
     this.bowlCam = 0;
@@ -178,6 +188,8 @@ export class Ride {
     this.dusk = 0;
     this.effects.clear();
     this.drips?.replaceChildren();
+    this.showCount(null);
+    for (const t of this.world.trapdoors || []) Object.assign(t, { lit: 0, open: 0 });
     this.camUp.set(0, 1, 0);
     this.applyMode(true);
     this.running = true;
@@ -197,6 +209,7 @@ export class Ride {
     this.effects.clear();
     if (this.speedfx) this.speedfx.style.opacity = '0';
     this.drips?.replaceChildren();
+    this.showCount(null);
     sound.windStop();
     sound.waterStop();
   }
@@ -258,10 +271,14 @@ export class Ride {
     const tr = this.track;
 
     if (!this.finished && this.time > START_DELAY) {
-      const ramp = Math.min(1, (this.time - START_DELAY) / 1.5);
-      this.v = this.sample(tr.speed, this.s) * ramp;
-      this.s = Math.min(tr.length, this.s + this.v * dt);
-      this.triggers();
+      if (this.hold > 0) this.holdInCapsule(dt);
+      else {
+        // Speeding up at the start, and again when a trapdoor lets go.
+        const ramp = Math.min(1, (this.time - START_DELAY) / 1.5, (this.time - this.resumeAt) / 0.35);
+        this.v = this.sample(tr.speed, this.s) * ramp;
+        this.s = Math.min(tr.length, this.s + this.v * dt);
+        this.triggers();
+      }
     }
     if (this.slide) this.spinRaft(dt);
 
@@ -298,6 +315,8 @@ export class Ride {
       const p = this.vec(tr.pos, this.s);
       const rho = Math.max(1.5, Math.hypot(p.x - bowl.center.x, p.z - bowl.center.z));
       this.raftYaw += dt * Math.min(4, (this.v / rho) * 0.7);
+    } else if (this.inRapids) {
+      this.raftYaw += dt * 0.9; // the rapids turn the float slowly round
     } else {
       this.raftYaw = wrapAngle(this.raftYaw);
       const target = this.finished ? this.raftYaw : 0.35 * Math.sin(this.time * 0.6);
@@ -325,6 +344,12 @@ export class Ride {
       this.camera.translateX(amp * (Math.sin(t * 31) * 0.6 + Math.sin(t * 53 + 1.3) * 0.4));
       this.camera.translateY(amp * (Math.sin(t * 37 + 0.7) * 0.6 + Math.sin(t * 67) * 0.4));
       this.camera.rotateZ(amp * 0.1 * Math.sin(t * 43));
+    }
+    if (this.slide && this.inRapids && !this.finished) {
+      // Bumping over the waves in the rapids.
+      const t = this.time;
+      this.camera.translateY((seat ? 0.09 : 0.05) * Math.sin(t * 8.5));
+      this.camera.rotateZ((seat ? 0.04 : 0.02) * Math.sin(t * 6.3 + 1));
     }
     this.streaks.update(dt, this.v, ramp(12, 30));
     if (this.speedfx) this.speedfx.style.opacity = String(0.75 * ramp(15, 35));
@@ -427,9 +452,76 @@ export class Ride {
     }
   }
 
-  // Water slide extras: round the toilet bowls, down the drain, and the splash into the pool.
+  // In a trapdoor capsule: stop, count down 3, 2, 1 with the lamps, then the floor opens.
+  holdInCapsule(dt) {
+    const t = this.holdTrap;
+    const before = HOLD - this.hold;
+    this.hold -= dt;
+    const now = HOLD - this.hold;
+    this.v = 0;
+    sound.waterSpeed(0);
+    COUNT_AT.forEach((at, k) => {
+      if (before < at && now >= at) {
+        this.showCount(String(3 - k));
+        sound.beep(k);
+        t.lit = k + 1;
+      }
+    });
+    if (before < OPEN_AT && now >= OPEN_AT) {
+      t.open = 1;
+      this.showCount('💦');
+      sound.trapdoor();
+      this.cheer = 2;
+      this.wetLens(10);
+    }
+    if (this.hold <= 0) {
+      this.hold = 0;
+      this.resumeAt = this.time;
+      this.showCount(null);
+      sound.whee();
+    }
+  }
+
+  // The big countdown numbers in the middle of the screen (null hides them).
+  showCount(text) {
+    const el = this.countdown;
+    if (!el) return;
+    el.classList.remove('show');
+    if (text === null) return;
+    el.textContent = text;
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  // Water slide extras: round the toilet bowls, down the drain, trapdoors, rapids, and the
+  // splash into the pool.
   slideTriggers(i) {
     const tr = this.track;
+    const traps = tr.trapdoors;
+    if (this.nextTrap < traps.length && i >= traps[this.nextTrap].capsule) {
+      this.holdTrap = this.world.trapdoors[this.nextTrap];
+      this.s = traps[this.nextTrap++].capsule * tr.step;
+      this.hold = HOLD;
+      this.v = 0;
+      return;
+    }
+    // Rapids: splashes and bounces all the way through.
+    const rapids = tr.special[Math.min(i, tr.count - 1)] === 1;
+    if (rapids && !this.inRapids) {
+      sound.whoosh();
+      this.cheer = 1.5;
+    }
+    this.inRapids = rapids;
+    if (rapids && this.time - this.lastRapids > 1.1) {
+      this.lastRapids = this.time;
+      const up = this.vec(tr.up, this.s);
+      const tan = this.vec(tr.tan, this.s);
+      const side = new THREE.Vector3().crossVectors(up, tan).normalize();
+      this.effects.splash(this.vec(tr.pos, this.s + 1.5), side, 35);
+      sound.rapids();
+      this.wetLens(4);
+      this.cheer = Math.max(this.cheer, 1.1);
+    }
     const bowls = tr.bowls;
     if (this.nextBowl < bowls.length && i >= bowls[this.nextBowl].spiralStart) {
       const b = bowls[this.nextBowl++];
@@ -506,6 +598,11 @@ export class Ride {
     const m = new THREE.Matrix4().makeBasis(side, up, tan);
     this.raft.quaternion.setFromRotationMatrix(m);
     this.raft.rotateY(this.raftYaw);
+    if (this.inRapids) {
+      // Bucking over the waves.
+      this.raft.rotateX(0.14 * Math.sin(this.time * 8.5));
+      this.raft.rotateZ(0.12 * Math.sin(this.time * 6.3 + 1));
+    }
     const p = this.vec(tr.pos, this.s);
     // Bobbing gently on the water.
     p.addScaledVector(up, 0.04 * Math.sin(this.time * 5));
@@ -525,6 +622,11 @@ export class Ride {
     const ahead = Math.min(tr.length, s + reach);
     const q = this.vec(tr.pos, ahead).addScaledVector(this.vec(tr.up, ahead).normalize(), eye);
     if (ahead - s < 1) q.add(this.vec(tr.tan, tr.length).multiplyScalar(LOOK_AHEAD));
+    if (this.hold > 0) {
+      // Waiting in a trapdoor capsule: look straight out, not down the drop just ahead.
+      const t = this.vec(tr.tan, s).setY(0).normalize();
+      q.copy(p).addScaledVector(t, LOOK_AHEAD).addScaledVector(up, eye);
+    }
     this.camUp.lerp(up, upBlend).normalize();
     this.camera.position.copy(p).addScaledVector(up, eye);
     this.camera.up.copy(this.camUp);

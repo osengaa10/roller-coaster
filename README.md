@@ -26,7 +26,9 @@ Same idea, at a tropical water park on an island: sand, palm trees, beach umbrel
 
 1. **Draw** the slide. It starts at the top of a tower with stairs and a striped canopy.
 2. **Draw a tight circle** with your finger and it turns into a **toilet bowl**: when you lift your finger the circle becomes a funnel (with a swirly sound). On the ride you spin round and round the bowl, faster and faster, then get *flushed* down the drain and shoot out underneath. Go round twice for a bigger bowl. Big circles stay loops, inside a see-through closed tube.
-3. Ride it on a two-seat ring float with your animal friend (you wear swim goggles).
+3. **Draw a quick zigzag** and it becomes **rapids**: a wide rocky white-water channel where the float bounces and spins over the waves, splashing.
+4. **Draw a line straight down** and it becomes a **trapdoor drop**: the float stops in a glass capsule at the top, the lights count down 3, 2, 1, the floor opens and you plunge straight down a tube.
+5. Ride it on a two-seat ring float with your animal friend sitting in front (you wear swim goggles).
 
 Things that happen on their own:
 - **Rubber ducks** bob along the slide. Scoop them up (quack!) and count them at the end.

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTrack, pathFromStrokes, starSpots, supportSpots, tunnelRuns, SLIDE_V_MIN, liftSpeed, STATIONS } from '../js/track.js';
-import { findBowls, cutBowls, funnelY } from '../js/slide.js';
+import { findBowls, cutBowls, funnelY, findDrops, findRapids, shapeSlide } from '../js/slide.js';
 
 const stroke = (f, n = 120) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
 const W = 0.03; // finger wobble at normal zoom on an iPad (20 px in track units)
@@ -158,4 +158,92 @@ test('the coaster is unchanged by the slide code', () => {
   assert.equal(tr.kind, 'coaster');
   assert.equal(tr.bowls, undefined);
   assert.ok(Math.min(...Array.from({ length: tr.count }, (_, i) => tr.up[i * 3 + 1])) < -0.8, 'a circle is a loop');
+});
+
+// --- Trapdoor drops and rapids ----------------------------------------------------------------
+
+const upThenDrop = (w = W) => [...line(0.25, 0.3, 0.5, 0.5, w), ...line(0.5, 0.5, 0.51, 0.1, w), ...line(0.51, 0.1, 1.2, 0.1, w)];
+const zigzag = (x0 = 0.6, w = W) => stroke((t) => ({ x: x0 + t * 0.6, y: 0.2 + 0.06 * Math.sin(t * Math.PI * 10), w }), 240);
+const withRapids = () => [...line(0.25, 0.3, 0.6, 0.2), ...zigzag(), ...line(1.2, 0.2, 1.6, 0.1)];
+const shaped = (pts) => shapeSlide(pathFromStrokes([pts], 'slide'));
+
+test('a line straight down is a trapdoor drop; a slope or a little tick is not', () => {
+  assert.equal(shaped(upThenDrop()).drops.length, 1);
+  const slope = [...line(0.25, 0.3, 0.5, 0.5), ...line(0.5, 0.5, 0.9, 0.1), ...line(0.9, 0.1, 1.2, 0.1)];
+  const tick = [...line(0.25, 0.3, 0.5, 0.3), ...line(0.5, 0.3, 0.5, 0.24), ...line(0.5, 0.24, 1.2, 0.24)];
+  assert.equal(shaped(slope).drops.length, 0);
+  assert.equal(shaped(tick).drops.length, 0);
+  // Drawn 10x zoomed out it has to be 10x taller, just as it looks on screen.
+  const big = [...line(0.25, 0.3, 2, 3, W * 10), ...line(2, 3, 2.05, 1.2, W * 10), ...line(2.05, 1.2, 4, 1.2, W * 10)];
+  assert.equal(shaped(big).drops.length, 1);
+  assert.equal(findDrops(pathFromStrokes([big.map((p) => ({ ...p, w: W }))], 'slide')).length, 1, 'tall enough either way');
+});
+
+test('a big loop is not a trapdoor drop', () => {
+  const big = [...line(0.25, 0.3, 0.8, 0.1), ...circle(1.1, 0.4, 0.3), ...line(1.1, 0.1, 2, 0.1)];
+  assert.equal(shaped(big).drops.length, 0);
+});
+
+test('a zigzag is rapids; a hill, a big S-curve and a tight circle are not', () => {
+  assert.equal(shaped(withRapids()).rapids.length, 1);
+  const hill = stroke((t) => ({ x: 0.3 + t * 0.8, y: 0.1 + 0.3 * Math.sin(Math.PI * t), w: W }));
+  const s = stroke((t) => ({ x: 0.3 + t * 1.2, y: 0.3 + 0.25 * Math.sin(t * Math.PI * 2), w: W }));
+  for (const pts of [hill, s, withBowl()]) assert.equal(findRapids(pathFromStrokes([pts], 'slide')).length, 0);
+});
+
+test('a tight circle next to a zigzag makes one bowl and one rapids', () => {
+  const both = [...withBowl(), ...zigzag(1.45), ...line(2.05, 0.2, 2.5, 0.1)];
+  const sh = shaped(both);
+  assert.equal(sh.bowls.length, 1);
+  assert.equal(sh.rapids.length, 1);
+});
+
+test('a trapdoor: the raft glides to a stop on a level spot, then plunges straight down', () => {
+  const tr = buildTrack([upThenDrop()], { kind: 'slide' });
+  assertFinite(tr);
+  assert.equal(tr.trapdoors.length, 1);
+  const { capsule, dropEnd } = tr.trapdoors[0];
+  assert.ok(Math.abs(tr.tan[capsule * 3 + 1]) < 0.15, 'capsule is level');
+  assert.ok(tr.speed[capsule] <= 2, 'slow at the capsule');
+  let vertical = false;
+  for (let i = capsule; i < capsule + 8 / tr.step; i++) vertical ||= tr.tan[i * 3 + 1] < -0.9;
+  assert.ok(vertical, 'straight down right after the capsule');
+  assert.ok(tr.speed[dropEnd] > 10, `fast at the bottom: ${tr.speed[dropEnd]}`);
+  assert.equal(tr.enclosed[capsule], 0, 'the capsule has its own glass');
+  assert.ok(tr.enclosed[Math.round((capsule + dropEnd) / 2)], 'the drop is a closed tube');
+  for (let i = 1; i < tr.count; i++) {
+    const [a, c] = [P(tr, i - 1), P(tr, i)];
+    assert.ok(Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2]) < tr.step * 2, `position jumps at ${i}`);
+  }
+  assert.ok(starSpots(tr).every((i) => tr.special[i] !== 2), 'no ducks in the capsule or the drop');
+});
+
+test('rapids: a bumpy stretch of little waves, with no cave in it', () => {
+  const tr = buildTrack([withRapids()], { kind: 'slide' });
+  assertFinite(tr);
+  assert.equal(tr.rapids.length, 1);
+  const [a, b] = tr.rapids[0];
+  let turns = 0;
+  let dir = 0;
+  let base = tr.pos[a * 3 + 1];
+  for (let i = a + 1; i <= b; i++) {
+    const d = Math.sign(tr.pos[i * 3 + 1] - tr.pos[(i - 1) * 3 + 1]);
+    if (d && d !== dir) {
+      turns++;
+      dir = d;
+    }
+    assert.ok(Math.abs(tr.pos[i * 3 + 1] - base) < 1.5, 'waves stay small');
+  }
+  assert.ok(turns >= 6, `bounces up and down (${turns} turns)`);
+  for (const [c, d] of tunnelRuns(tr)) assert.ok(d < a || c > b, 'no cave in the rapids');
+  for (let i = 1; i < tr.count; i++) {
+    const [p, q] = [P(tr, i - 1), P(tr, i)];
+    assert.ok(Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < tr.step * 2, `position jumps at ${i}`);
+  }
+});
+
+test('the coaster ignores zigzags and straight drops', () => {
+  const tr = buildTrack([[...upThenDrop(), ...zigzag(1.3), ...line(1.9, 0.2, 2.2, 0.1)]]);
+  assert.equal(tr.rapids, undefined);
+  assert.equal(tr.trapdoors, undefined);
 });

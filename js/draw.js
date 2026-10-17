@@ -1,7 +1,7 @@
 // The drawing screen: a side view of a sunny park (or a beach, for the water slide) where a
 // finger drag lays down track.
 import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, cssColor, stationFor } from './track.js';
-import { findBowls } from './slide.js';
+import { shapeSlide } from './slide.js';
 import * as beach from './draw-slide.js';
 import * as sound from './sound.js';
 
@@ -73,7 +73,7 @@ export class DrawPad {
     this.active = true;
     this.mode = 'coaster';
     this.sessions = {}; // per game: its strokes, undo history and view
-    this.bowls = null; // water slide: tight circles found in the drawing (cached; see bowlList)
+    this.found = null; // water slide: bowls, rapids and drops found in the drawing (cached; see slideShape)
 
     this.resize();
     this.fitView();
@@ -117,24 +117,31 @@ export class DrawPad {
     const saved = this.sessions[mode];
     this.strokes = saved ? saved.strokes : strokes;
     this.history = saved ? saved.history : [];
-    this.bowls = null;
+    this.found = null;
     if (saved) this.setView(saved.zoom, saved.panX);
     else this.fitView();
     this.dirty = true;
   }
 
-  // Tight circles on the water slide become toilet bowls. Found once a line is finished; while
-  // a line is being drawn only points are added at the end, so the old ones stay valid.
-  bowlList(path) {
-    if (this.mode !== 'slide') return [];
-    if (!this.bowls) this.bowls = findBowls(path);
-    return this.bowls;
+  // The water slide's tricks: tight circles become toilet bowls, zigzags rapids, and lines
+  // straight down trapdoor drops. Found once a line is finished; while a line is being drawn only
+  // points are added at the end, so the ones found stay valid and are just reapplied.
+  slideShape(path) {
+    const shape = shapeSlide(path, this.found);
+    this.found = shape.found;
+    return shape;
   }
 
+  // A line was finished (or the drawing changed): look for tricks again, with a sound for each new one.
   strokesChanged() {
-    const before = this.bowls ? this.bowls.length : 0;
-    this.bowls = null;
-    if (this.mode === 'slide' && this.bowlList(this.path()).length > before) sound.swirl();
+    const before = this.found;
+    this.found = null;
+    if (this.mode !== 'slide') return;
+    const now = this.slideShape(this.path()).found;
+    const more = (k) => now[k].length > (before ? before[k].length : 0);
+    if (more('bowls')) sound.swirl();
+    if (more('rapids')) sound.splash();
+    if (more('drops')) sound.trapdoor();
   }
 
   resize() {
@@ -323,7 +330,7 @@ export class DrawPad {
         this.strokes.pop();
         this.history.pop();
       }
-      this.bowls = null;
+      this.found = null;
       this.onChange();
     }
     const [a, b] = [...this.pointers.values()];
@@ -353,7 +360,7 @@ export class DrawPad {
     if (!this.history.length) return false;
     this.strokes = this.history.pop();
     this.dirty = true;
-    this.bowls = null;
+    this.found = null;
     this.onChange();
     return true;
   }
@@ -362,7 +369,7 @@ export class DrawPad {
     if (!this.strokes.length) return false;
     this.pushHistory(); // so undo can bring it back
     this.strokes = [];
-    this.bowls = null;
+    this.found = null;
     this.setView(1, 0);
     this.onChange();
     return true;
@@ -419,7 +426,7 @@ export class DrawPad {
 
     if (slide) {
       beach.paintSand(this, groundAt, z);
-      beach.paintSlide(this, pts, this.bowlList(pts));
+      beach.paintSlide(this, pts, this.slideShape(pts));
       beach.paintTower(this);
     } else {
       this.drawTrack();

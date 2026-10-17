@@ -44,11 +44,11 @@ export class Effects {
   }
 
   // Water spraying up on both sides of the track.
-  splash(at, side) {
+  splash(at, side, count = 120) {
     for (const s of [-1, 1]) {
       this.burst({
         at: at.clone().addScaledVector(side, s * 1.5),
-        count: 120,
+        count,
         colors: ['#ffffff', '#bfe6ff', '#7cc6ff'],
         velocity: () => new THREE.Vector3().addScaledVector(side, s * (2 + Math.random() * 5)).add(new THREE.Vector3((Math.random() - 0.5) * 4, 6 + Math.random() * 8, (Math.random() - 0.5) * 4)),
         gravity: 14,

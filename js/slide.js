@@ -228,3 +228,142 @@ export function slideRunout(end, dir) {
   pts.push({ x: x + dir * POOL_LEN, y: POOL_Y, pool: 1 });
   return pts;
 }
+
+// --- Trapdoor drops and rapids ---------------------------------------------------------------
+
+const DROP_MIN = 0.15; // normalized: a straight-down line at least this tall (6 m, ~100 px on an iPad)
+const DROP_WOBBLES = 6; // ...or 6 finger-wobbles tall when zoomed out
+const DROP_STEEP = 0.58; // each piece within ~30 degrees of straight down (|dx| <= 0.58 |dy|)
+const DROP_DRIFT = 0.3; // and it can't wander sideways more than 0.3x its height overall
+export const CAPSULE_LEN = 0.12; // normalized: level spot at the top for the capsule (5 m)
+
+// Lines drawn straight down. Returns [{ i0, i1 }] (top and bottom path indices).
+export function findDrops(path) {
+  const out = [];
+  const n = path.length;
+  for (let i = 1; i < n - 1; ) {
+    let last = i;
+    let maxW = path[i].w || 0;
+    for (let k = i + 1; k < n; k++) {
+      // Step from the last point checked, once it's moved more than a tiny wobble (~2 px).
+      const a = path[last];
+      const b = path[k];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      maxW = Math.max(maxW, b.w || 0);
+      if (Math.hypot(dx, dy) < Math.max(0.003, (b.w || 0) / 10)) continue;
+      if (dy >= 0 || Math.abs(dx) > DROP_STEEP * -dy) break;
+      last = k;
+    }
+    const drop = path[i].y - path[last].y;
+    const drift = Math.abs(path[last].x - path[i].x);
+    if (last > i && drop >= Math.max(DROP_MIN, DROP_WOBBLES * maxW) && drift <= DROP_DRIFT * drop && straight(path, i, last)) {
+      out.push({ i0: i, i1: last });
+      i = last + 1;
+    } else i++;
+  }
+  return out;
+}
+
+// A straight line, not the steep side of a curve (like a loop): its first and last thirds head
+// the same way, within about 20 degrees.
+function straight(path, i, j) {
+  const third = (j - i) / 3;
+  const a = path[i];
+  const b = path[Math.round(i + third)];
+  const c = path[Math.round(j - third)];
+  const d = path[j];
+  let turn = Math.atan2(d.y - c.y, d.x - c.x) - Math.atan2(b.y - a.y, b.x - a.x);
+  turn = Math.abs(((turn + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  return turn < 0.35;
+}
+
+const RAPIDS_TURNS = 4; // up-down turning points in a row
+const RAPIDS_AMP = 0.2; // normalized: each swing at most this tall...
+const RAPIDS_AMP_WOBBLES = 7; // ...or 7 finger-wobbles when zoomed out
+const RAPIDS_GAP = 0.15; // and turning points at most this far apart sideways
+const RAPIDS_GAP_WOBBLES = 5;
+
+// Quick up-and-down zigzags. Returns [{ i0, i1 }].
+export function findRapids(path) {
+  const n = path.length;
+  if (n < 6) return [];
+  // Turning points (peaks and dips), ignoring wiggles smaller than about 10 px.
+  const turns = [];
+  let dir = 0;
+  let hi = 0;
+  let lo = 0;
+  for (let k = 1; k < n; k++) {
+    const y = path[k].y;
+    const thr = Math.max(0.012, 0.6 * (path[k].w || 0));
+    if (y > path[hi].y) hi = k;
+    if (y < path[lo].y) lo = k;
+    if (dir >= 0 && path[hi].y - y > thr) {
+      if (dir === 1 || hi > 0) turns.push(hi);
+      dir = -1;
+      lo = k;
+    } else if (dir <= 0 && y - path[lo].y > thr) {
+      if (dir === -1 || lo > 0) turns.push(lo);
+      dir = 1;
+      hi = k;
+    }
+  }
+  const out = [];
+  let a = 0;
+  const ok = (j) => {
+    const p = path[turns[j - 1]];
+    const q = path[turns[j]];
+    const w = Math.max(p.w || 0, q.w || 0);
+    const dx = q.x - p.x;
+    return (
+      Math.abs(q.y - p.y) <= Math.max(RAPIDS_AMP, RAPIDS_AMP_WOBBLES * w) &&
+      Math.abs(dx) <= Math.max(RAPIDS_GAP, RAPIDS_GAP_WOBBLES * w) &&
+      Math.abs(dx) > 1e-4
+    );
+  };
+  const sameWay = (j) => Math.sign(path[turns[j]].x - path[turns[j - 1]].x) === Math.sign(path[turns[a + 1]].x - path[turns[a]].x);
+  for (let j = 1; j <= turns.length; j++) {
+    const fits = j < turns.length && ok(j);
+    if (fits && (j === a + 1 || sameWay(j))) continue;
+    if (j - a >= RAPIDS_TURNS) out.push({ i0: turns[a], i1: turns[j - 1] });
+    a = fits ? j - 1 : j; // turned back the other way: a new run can start from the last turn
+  }
+  return out;
+}
+
+// The slide's path after all its tricks are applied: tight circles cut out (bowls), zigzags
+// flattened into rapids (tagged rp: 1), straight-down lines made truly vertical with a level
+// spot for the capsule at the top (tagged tp: 1 for the capsule, tp: 2 for the drop).
+// `found` reuses features found earlier, which stay valid while a line is only being added to.
+export function shapeSlide(path, found = null) {
+  const bowls = found ? found.bowls : findBowls(path);
+  const p = cutBowls(path, bowls).map((q) => ({ ...q }));
+  const rapids = found ? found.rapids : findRapids(p);
+  for (const r of rapids) {
+    if (r.i1 >= p.length) continue;
+    const a = p[r.i0];
+    const b = p[r.i1];
+    for (let k = r.i0; k <= r.i1; k++) {
+      const f = Math.max(0, Math.min(1, (p[k].x - a.x) / (b.x - a.x || 1)));
+      p[k].y = a.y + (b.y - a.y) * f;
+      p[k].rp = 1;
+    }
+  }
+  const drops = found ? found.drops : findDrops(p);
+  for (const d of drops) {
+    if (d.i1 >= p.length) continue;
+    const top = p[d.i0];
+    for (let k = d.i0 + 1; k <= d.i1; k++) {
+      p[k].x = top.x;
+      p[k].tp = 2;
+    }
+    top.tp = 1;
+    let len = 0;
+    for (let k = d.i0 - 1; k >= 2 && len < CAPSULE_LEN; k--) {
+      len += Math.abs(p[k + 1].x - p[k].x); // along the ground (heights are being levelled)
+      p[k].y = top.y;
+      p[k].tp = 1;
+    }
+  }
+  return { path: p, bowls, rapids, drops, found: { bowls, rapids, drops } };
+}
