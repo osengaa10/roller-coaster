@@ -144,6 +144,58 @@ export function makeSeatCar() {
   return car;
 }
 
+// The water slide's ride: a two-seat ring float, one ring behind the other (him in the orange
+// back ring, his friend in the yellow front one), with grab handles. Local +z is forward and the
+// origin sits on the water. Narrow enough (and riding high enough) to stay inside the trough.
+export const RING_Z = 0.58; // ring centers at z = +-RING_Z
+const RING_R = 0.45;
+const RING_TUBE = 0.23;
+const RING_Y = 0.25;
+export function makeRaft() {
+  const raft = new THREE.Group();
+  const ring = new THREE.TorusGeometry(RING_R, RING_TUBE, 12, 28).rotateX(Math.PI / 2);
+  const band = new THREE.TorusGeometry(RING_R, RING_TUBE + 0.005, 4, 28).rotateX(Math.PI / 2);
+  const outer = RING_R + RING_TUBE;
+  for (const [z, color] of [[-RING_Z, '#ff8c42'], [RING_Z, '#ffd23f']]) {
+    const tubeRing = new THREE.Mesh(ring, paint(color, 60));
+    tubeRing.position.set(0, RING_Y, z);
+    raft.add(tubeRing);
+    // Seat across the hole, and a white stripe round the ring.
+    raft.add(part(CYL, '#3a86ff', [0, 0.1, z], [RING_R - 0.06, 0.06, RING_R - 0.06]));
+    const stripe = new THREE.Mesh(band, paint('#ffffff', 60));
+    stripe.scale.set(1, 0.18, 1);
+    stripe.position.set(0, RING_Y, z);
+    raft.add(stripe);
+    // Grab handles on both sides of each ring, and one on the very front.
+    const handles = [[outer, z, Math.PI / 2], [-outer, z, Math.PI / 2]];
+    if (z > 0) handles.push([0, z + outer, 0]);
+    for (const [hx, hz, turn] of handles) {
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.03, 6, 12, Math.PI), paint('#2b2d42', 30));
+      handle.position.set(hx, RING_Y + 0.2, hz);
+      handle.rotation.y = turn;
+      raft.add(handle);
+    }
+  }
+  // A strap joining the two rings.
+  raft.add(part(BOX, '#2b2d42', [0, RING_Y, 0], [0.5, 0.12, 0.4]));
+  return raft;
+}
+
+// The raft seen from his seat (child of the camera): his own ring under him and his friend's
+// ring in front. The friend sits at FRIEND_RAFT, leaning to one side to look back at him so
+// they don't block the view down the slide.
+const SEAT_Z = -0.1; // his ring's center, relative to the camera
+export const FRIEND_RAFT = { x: 0.3, y: -0.85, z: SEAT_Z - RING_Z * 2 };
+export function makeSeatRaft(eye) {
+  const pivot = new THREE.Group(); // under him, in the middle of his ring
+  pivot.position.set(0, -eye, SEAT_Z);
+  pivot.rotation.y = Math.PI; // raft forward (+z) -> camera forward (-z)
+  const raft = makeRaft();
+  raft.position.z = RING_Z;
+  pivot.add(raft);
+  return pivot;
+}
+
 // Riders: him and the animal friends. Built facing +z, sitting at y = 0.
 const RIDERS = {
   kid: { body: '#3a86ff', head: '#f2c6a0', paw: '#f2c6a0' },
@@ -175,11 +227,24 @@ export function makeRider(kind) {
     head.add(ball(k.nose || '#111111', [0, -0.03, 0.24 + r * 0.8], 0.035));
   };
 
+  let goggles = null;
   if (kind === 'kid') {
     head.add(ball('#6b3e26', [0, 0.08, -0.02], 0.3, [1, 0.8, 1])); // hair
     head.add(ball(k.head, [0, -0.01, 0.06], 0.26));
     eyes(0.02, 0.29, 0.09);
     head.add(part(SPHERE, '#d9534f', [0, -0.1, 0.27], [0.08, 0.03, 0.03])); // smile
+    // Swim goggles pushed up on his forehead, for the water slide.
+    goggles = new THREE.Group();
+    const strap = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.025, 6, 24), mat('#3a86ff'));
+    strap.rotation.x = Math.PI / 2 - 0.35;
+    strap.position.y = 0.14;
+    goggles.add(strap);
+    for (const sx of [-1, 1]) {
+      goggles.add(ball('#2ec4b6', [sx * 0.09, 0.2, 0.25], 0.07, [1, 0.8, 0.6]));
+      goggles.add(ball('#d8fbff', [sx * 0.09 + 0.02, 0.215, 0.285], 0.025));
+    }
+    goggles.visible = false;
+    head.add(goggles);
   } else if (kind === 'bear') {
     for (const s of [-1, 1]) head.add(ball(k.head, [s * 0.2, 0.22, 0], 0.1));
     eyes();
@@ -228,6 +293,7 @@ export function makeRider(kind) {
   let time = Math.random() * 10;
   return {
     group: g,
+    goggles,
     // cheer: 0..1 how much the arms should be up; speed01 makes the head bob.
     update(dt, cheer, speed01 = 0) {
       time += dt;

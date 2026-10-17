@@ -3,30 +3,44 @@
 // Drawing coordinates are normalized: y = 0 is the ground, y = 1 is the top of
 // the drawing area, x uses the same unit. World coordinates are meters.
 
+import { findBowls, cutBowls, bowlPath, slideRunout, POOL_Y } from './slide.js';
+
 export const WORLD_SCALE = 40; // meters per normalized drawing unit
-export const STATION = { x0: 0.04, x1: 0.26, y: 0.06 };
+// Where the ride starts: the coaster station on the ground, the water slide on top of a tower.
+export const STATIONS = {
+  coaster: { x0: 0.04, x1: 0.26, y: 0.06 },
+  slide: { x0: 0.04, x1: 0.22, y: 0.3 },
+};
+export const STATION = STATIONS.coaster;
+export const stationFor = (kind = 'coaster') => STATIONS[kind] || STATION;
 export const MIN_DRAWN_LENGTH = 0.35; // how much he must draw before "go" lights up
 export const MIN_Y = 0.025;
 export const STEP = 0.5; // meters between final track samples (more on giant coasters)
 const MAX_SAMPLES = 16000; // giant space coasters get coarser sampling to stay fast
 
 export const V_MIN = 5.5; // chain-lift speed: the train never stalls or rolls back
+export const SLIDE_V_MIN = 4.5; // water jets push the raft at least this fast
 export const V_MAX = 45; // about 100 mph, like the fastest real coasters
 // The lift chain speeds up gently on tall hills so a giant one doesn't take forever, and very
 // tall drops may go a bit faster. Kept modest so the ride stays smooth.
 // Normal-size hills keep a gentle chain; past ~30 m it picks up much faster, so even a
 // max-height hill climbs in well under half a minute.
 const FAST_LIFT_FROM = 30; // meters
-export const liftSpeed = (height) => {
+export const liftSpeed = (height, vMin = V_MIN) => {
   const h = Math.max(0, height);
-  const gentle = V_MIN + Math.min(h, FAST_LIFT_FROM) * 0.12;
+  const gentle = vMin + Math.min(h, FAST_LIFT_FROM) * 0.12;
   return Math.min(100, gentle + Math.max(0, h - FAST_LIFT_FROM) * 0.7);
 };
-const maxSpeed = (height) => Math.min(100, Math.max(V_MAX, liftSpeed(height) * 1.25));
 const G = 9.81;
-const FRICTION = 0.015;
 const BRAKE_LENGTH = 0.7; // normalized
-const BRAKE_DECEL = 7;
+// Coaster: steel wheels, brakes at the end. Slide: water is slower and stops him in the pool.
+const PROFILES = {
+  coaster: { vMin: V_MIN, vMax: V_MAX, friction: 0.015, brakeDecel: 7 },
+  slide: { vMin: SLIDE_V_MIN, vMax: 28, friction: 0.025, brakeDecel: 9 },
+};
+const maxSpeed = (height, prof) => Math.min(100, Math.max(prof.vMax, liftSpeed(height, prof.vMin) * 1.25));
+const ENCLOSE_UP = 0.4; // slide steeper than this (or upside down) is a closed tube
+const ENCLOSE_PAD = 6; // meters of closed tube either side, so the tube pieces don't flicker
 const Z_DRIFT = 0.4; // sideways shift per unit of backwards travel, keeps loops from hitting themselves
 const LONG_INVERSION = 22; // meters; longer upside-down runs get rolled back upright
 
@@ -65,10 +79,11 @@ export function normalizeStroke(s) {
 }
 
 // The full 2D path the player sees: station, then everything drawn, joined end to end.
-export function pathFromStrokes(strokes) {
+export function pathFromStrokes(strokes, kind = 'coaster') {
+  const st = stationFor(kind);
   const path = [
-    { x: STATION.x0, y: STATION.y, c: 0 },
-    { x: STATION.x1, y: STATION.y, c: 0 },
+    { x: st.x0, y: st.y, c: 0 },
+    { x: st.x1, y: st.y, c: 0 },
   ];
   for (const stroke of strokes) {
     const { c, p } = normalizeStroke(stroke);
@@ -83,40 +98,53 @@ export function pathLength(pts) {
   return len;
 }
 
-export function drawnLength(strokes) {
-  return pathLength(pathFromStrokes(strokes)) - (STATION.x1 - STATION.x0);
+export function drawnLength(strokes, kind = 'coaster') {
+  const st = stationFor(kind);
+  return pathLength(pathFromStrokes(strokes, kind)) - (st.x1 - st.x0);
 }
 
 // Evenly spaced points along a polyline (works for any dimension via keys).
-// A crayon index `c` rides along un-interpolated: each segment takes its end point's color,
-// so the line joining two strokes matches the new stroke.
-export function resample(pts, spacing, keys = ['x', 'y']) {
+// Labels (crayon `c`, wobble `w`, and the slide's pool and bowl-part tags) ride along
+// un-interpolated: each segment takes its end point's labels, so the line joining two strokes
+// matches the new stroke. `lerp` fields are interpolated without counting toward distance.
+// A bowl marker is passed on to exactly one output point.
+const CARRY = ['c', 'w', 'pool', 'bp', 'bi'];
+export function resample(pts, spacing, keys = ['x', 'y'], lerp = []) {
   const clean = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
     if (dist(pts[i], clean[clean.length - 1], keys) > 1e-9) clean.push(pts[i]);
+    else if (pts[i].bowl) clean[clean.length - 1] = { ...clean[clean.length - 1], bowl: pts[i].bowl };
   }
   if (clean.length < 2) return clean.map((p) => ({ ...p }));
 
   const out = [{ ...clean[0] }];
   let carry = 0; // distance already travelled since the last emitted point
+  let pending = null;
   for (let i = 1; i < clean.length; i++) {
     const a = clean[i - 1];
     const b = clean[i];
+    if (b.bowl) pending = b.bowl;
     const seg = dist(a, b, keys);
     let t = spacing - carry;
     while (t <= seg) {
       const f = t / seg;
       const p = {};
       for (const k of keys) p[k] = a[k] + (b[k] - a[k]) * f;
-      if ('c' in b) p.c = b.c;
-      if ('w' in b) p.w = b.w;
+      for (const k of lerp) p[k] = a[k] + (b[k] - a[k]) * f;
+      for (const k of CARRY) if (k in b) p[k] = b[k];
+      if (pending) {
+        p.bowl = pending;
+        pending = null;
+      }
       out.push(p);
       t += spacing;
     }
     carry = seg - (t - spacing);
   }
-  const last = clean[clean.length - 1];
-  if (dist(out[out.length - 1], last, keys) > spacing * 0.25) out.push({ ...last });
+  const last = { ...clean[clean.length - 1] };
+  delete last.bowl;
+  if (dist(out[out.length - 1], last, keys) > spacing * 0.25) out.push(last);
+  if (pending) out[out.length - 1].bowl = pending;
   return out;
 }
 
@@ -161,9 +189,16 @@ function dist(a, b, keys) {
   return Math.sqrt(s);
 }
 
-export function buildTrack(strokes) {
-  // 1. 2D path: station + drawing + flat brake run in whatever direction he was heading.
-  const drawn = smoothByScale(smoothByScale(resample(pathFromStrokes(strokes), 0.012), 0.012), 0.012);
+export function buildTrack(strokes, { kind = 'coaster' } = {}) {
+  const slide = kind === 'slide';
+  const prof = PROFILES[slide ? 'slide' : 'coaster'];
+  const station = stationFor(kind);
+  // 1. 2D path: station + drawing + the end (a flat brake run in whatever direction he was
+  // heading, or for the slide a run down into the pool). Tight circles on the slide are cut
+  // out here and come back as toilet bowls in 3D.
+  let path = pathFromStrokes(strokes, kind);
+  if (slide) path = cutBowls(path, findBowls(path));
+  const drawn = smoothByScale(smoothByScale(resample(path, 0.012), 0.012), 0.012);
   let dirX = 1;
   for (let i = drawn.length - 1; i > 0 && drawn.length - i < 12; i--) {
     const dx = drawn[drawn.length - 1].x - drawn[i - 1].x;
@@ -173,31 +208,58 @@ export function buildTrack(strokes) {
     }
   }
   const end = drawn[drawn.length - 1];
-  const withBrake = resample(
-    [...drawn, { x: end.x + dirX * 0.06, y: end.y, c: 0 }, { x: end.x + dirX * BRAKE_LENGTH, y: end.y, c: 0 }],
-    0.012,
-  );
-  const flat = smooth(withBrake, 10);
-  for (const p of flat) p.y = Math.max(p.y, MIN_Y);
+  const tail = slide
+    ? slideRunout(end, dirX).map((p) => ({ ...p, c: end.c ?? 0 }))
+    : [{ x: end.x + dirX * 0.06, y: end.y, c: 0 }, { x: end.x + dirX * BRAKE_LENGTH, y: end.y, c: 0 }];
+  const withEnd = resample([...drawn, ...tail], 0.012);
+  const flat = smooth(withEnd, 10);
+  for (const p of flat) p.y = Math.max(p.y, p.pool ? POOL_Y : MIN_Y);
 
-  // 2. Into 3D meters, drifting sideways (z) whenever the path doubles back.
+  // 2. Into 3D meters, drifting sideways (z) whenever the path doubles back. Each bowl is
+  // spliced in where its circle was, and everything after it moves over to where it comes out.
   let z = 0;
-  const pts3 = flat.map((p, i) => {
+  const shift = { x: 0, z: 0 };
+  const bowlInfo = [];
+  const pts3 = [];
+  for (let i = 0; i < flat.length; i++) {
+    const p = flat[i];
     if (i > 0) z += Math.max(0, flat[i - 1].x - p.x) * Z_DRIFT;
-    return { x: (p.x - STATION.x0) * WORLD_SCALE, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE, c: p.c ?? 0 };
-  });
+    const q = { x: (p.x - station.x0) * WORLD_SCALE + shift.x, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE + shift.z, c: p.c ?? 0 };
+    if (slide) Object.assign(q, { hx: 0, hy: 1, hz: 0, hw: 0 });
+    if (p.bowl && pts3.length) {
+      let dir = dirX;
+      for (let k = i - 2; k >= 0 && i - k < 40; k--) {
+        const dx = flat[i - 1].x - flat[k].x;
+        if (Math.abs(dx) > 0.01) {
+          dir = Math.sign(dx);
+          break;
+        }
+      }
+      const { points, exit, info } = bowlPath(pts3[pts3.length - 1], p.bowl, dir, q.y);
+      for (const b of points) pts3.push({ ...b, c: q.c, bi: bowlInfo.length });
+      bowlInfo.push(info);
+      shift.x += exit.x - q.x;
+      shift.z += exit.z - q.z;
+      q.x = exit.x;
+      q.z = exit.z;
+    }
+    pts3.push(q);
+  }
   const keys3 = ['x', 'y', 'z'];
+  const hintKeys = slide ? ['hx', 'hy', 'hz', 'hw'] : [];
   const rough = smooth(pts3, 4, keys3);
   let roughLength = 0;
   for (let i = 1; i < rough.length; i++) roughLength += dist(rough[i], rough[i - 1], keys3);
   const step = Math.max(STEP, roughLength / MAX_SAMPLES);
-  const samples = smooth(resample(rough, step, keys3), 3, keys3);
+  const samples = smooth(resample(rough, step, keys3, hintKeys), 3, keys3);
 
   const n = samples.length;
   const pos = new Float32Array(n * 3);
   samples.forEach((p, i) => pos.set([p.x, p.y, p.z], i * 3));
+  const inBowl = (i) => samples[i].bp === 2 || samples[i].bp === 3; // the spiral and the drain
 
   // 3. Frames. "up" is the in-plane normal of the drawn line, so loops turn him upside down.
+  // In a bowl it's the funnel wall instead (from the hint), so he rides around the wall.
   const tan = new Float32Array(n * 3);
   const normal = new Float32Array(n * 3);
   let prevN = [0, 1, 0];
@@ -205,7 +267,7 @@ export function buildTrack(strokes) {
     const a = samples[Math.max(0, i - 1)];
     const b = samples[Math.min(n - 1, i + 1)];
     const t = norm([b.x - a.x, b.y - a.y, b.z - a.z]) || [1, 0, 0];
-    let nv = [-t[1], t[0], 0];
+    let nv = slide && inBowl(i) ? [samples[i].hx, samples[i].hy, samples[i].hz] : [-t[1], t[0], 0];
     const d = dot(nv, t);
     nv = norm([nv[0] - t[0] * d, nv[1] - t[1] * d, nv[2] - t[2] * d]) || prevN;
     prevN = nv;
@@ -235,27 +297,28 @@ export function buildTrack(strokes) {
     const s = Math.sin(phi);
     up.set(norm([nv[0] * c + b[0] * s, nv[1] * c + b[1] * s, nv[2] * c + b[2] * s]) || nv, i * 3);
   }
+  if (slide) blendHints(samples, tan, up);
 
-  // 4. Speed: real-ish energy on drops, chain lift floor on climbs, brakes at the end.
+  // 4. Speed: real-ish energy on drops, chain lift (or water jets) on climbs, brakes at the end.
   const length = (n - 1) * step;
   const speed = new Float32Array(n);
   const lift = new Uint8Array(n);
-  let v2 = V_MIN * V_MIN;
+  let v2 = prof.vMin * prof.vMin;
   for (let i = 0; i < n; i++) {
-    if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * FRICTION * G * step;
+    if (i > 0) v2 += 2 * G * (pos[(i - 1) * 3 + 1] - pos[i * 3 + 1]) - 2 * prof.friction * G * step;
     let v = Math.sqrt(Math.max(0, v2));
-    const floor = liftSpeed(pos[i * 3 + 1]);
+    const floor = liftSpeed(pos[i * 3 + 1], prof.vMin);
     if (v < floor) {
       v = floor;
       lift[i] = tan[i * 3 + 1] > 0.05 ? 1 : 0;
     }
-    v = Math.min(v, maxSpeed(pos[i * 3 + 1]));
+    v = Math.min(v, maxSpeed(pos[i * 3 + 1], prof));
     v2 = v * v;
     speed[i] = v;
   }
   for (let i = 0; i < n; i++) {
     const toEnd = length - i * step;
-    speed[i] = Math.max(0.6, Math.min(speed[i], Math.sqrt(2 * BRAKE_DECEL * toEnd)));
+    speed[i] = Math.max(0.6, Math.min(speed[i], Math.sqrt(2 * prof.brakeDecel * toEnd)));
   }
 
   // 5. Places to shout "wheee": the top of any big drop.
@@ -270,7 +333,103 @@ export function buildTrack(strokes) {
   const rgb = new Float32Array(n * 3);
   samples.forEach((p, i) => rgb.set(colorAt(p.c ?? 0, (i * step) / WORLD_SCALE), i * 3));
 
-  return { count: n, step, length, pos, tan, up, speed, lift, whee, rgb };
+  const track = { kind, count: n, step, length, pos, tan, up, speed, lift, whee, rgb };
+  if (slide) Object.assign(track, slideParts(samples, track, bowlInfo));
+  return track;
+}
+
+// Bowl samples carry a hint for which way is up (hw = how much). Turn the regular frame toward
+// it around the direction of travel, so going into and out of a bowl rolls smoothly.
+function blendHints(samples, tan, up) {
+  let prev = 0;
+  let prevW = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const p = samples[i];
+    const w = Math.max(0, Math.min(1, p.hw || 0));
+    if (w < 1e-3) {
+      prevW = 0;
+      continue;
+    }
+    const t = [tan[i * 3], tan[i * 3 + 1], tan[i * 3 + 2]];
+    const u0 = [up[i * 3], up[i * 3 + 1], up[i * 3 + 2]];
+    const d = p.hx * t[0] + p.hy * t[1] + p.hz * t[2];
+    const h = norm([p.hx - t[0] * d, p.hy - t[1] * d, p.hz - t[2] * d]);
+    if (!h) continue;
+    let ang = Math.atan2(dot(cross(u0, h), t), dot(u0, h));
+    // Keep the turn going the same way as the sample before, unless fully on the hint
+    // (where any equivalent angle gives the same answer).
+    if (prevW > 0 && prevW < 0.999) {
+      while (ang - prev > Math.PI) ang -= 2 * Math.PI;
+      while (ang - prev < -Math.PI) ang += 2 * Math.PI;
+    }
+    prev = ang;
+    prevW = w;
+    const a = ang * w;
+    const tu = cross(t, u0);
+    up.set(norm([u0[0] * Math.cos(a) + tu[0] * Math.sin(a), u0[1] * Math.cos(a) + tu[1] * Math.sin(a), u0[2] * Math.cos(a) + tu[2] * Math.sin(a)]) || u0, i * 3);
+  }
+}
+
+// The slide's extras: where the bowls are, which parts are closed tubes, and the pool.
+function slideParts(samples, track, bowlInfo) {
+  const { count: n, up, pos, step } = track;
+  const bowls = bowlInfo.map((info, id) => {
+    const range = (test) => {
+      let a = -1;
+      let b = -1;
+      samples.forEach((p, i) => {
+        if (p.bi === id && test(p)) {
+          if (a < 0) a = i;
+          b = i;
+        }
+      });
+      return [a, b];
+    };
+    const [start, end] = range(() => true);
+    const [spiralStart, spiralEnd] = range((p) => p.bp === 2);
+    const [drainStart, drainEnd] = range((p) => p.bp === 3);
+    return { ...info, start, end, spiralStart, spiralEnd, drainStart, drainEnd };
+  });
+  const bowlMask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (samples[i].bp >= 2) bowlMask[i] = samples[i].bp;
+
+  // The pool: the low stretch at the very end.
+  let poolStart = n - 1;
+  while (poolStart > 0 && pos[(poolStart - 1) * 3 + 1] < 0.9) poolStart--;
+
+  // Closed tubes: wherever he'd fall out (steep or upside down), down the drain and out from
+  // under the bowl. Padded, and short gaps filled in, so it doesn't keep opening and closing.
+  const raw = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const bp = samples[i].bp;
+    raw[i] = (up[i * 3 + 1] < ENCLOSE_UP && bp !== 2) || bp === 3 || bp === 4 ? 1 : 0;
+  }
+  const pad = Math.round(ENCLOSE_PAD / step);
+  const enclosed = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (!raw[i]) continue;
+    for (let j = Math.max(0, i - pad); j <= Math.min(n - 1, i + pad); j++) enclosed[j] = 1;
+  }
+  for (let i = 0; i < n; ) {
+    if (enclosed[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && !enclosed[j]) j++;
+    if (i > 0 && j < n && (j - i) * step < 8) enclosed.fill(1, i, j);
+    i = j;
+  }
+  for (let i = 0; i < n; i++) if (samples[i].bp === 2 || i >= poolStart - Math.round(2 / step)) enclosed[i] = 0;
+
+  const mid = Math.round((poolStart + n - 1) / 2);
+  const pool = {
+    start: poolStart,
+    center: { x: pos[mid * 3], y: 0, z: pos[mid * 3 + 2] },
+    dir: { x: track.tan[mid * 3], z: track.tan[mid * 3 + 2] },
+    length: (n - 1 - poolStart) * step,
+  };
+  return { bowls, bowlMask, enclosed, pool };
 }
 
 // Where to stand support pillars: one every few meters, from just under the track down to
@@ -299,7 +458,7 @@ export function supportSpots(track) {
   for (let i = 0; i < n; i += Math.max(1, Math.round(POLE_EVERY / step))) {
     // Only under upright track: in loops and other inversions "under the spine" points sideways
     // or up, and a column there would hold nothing. Loops hold themselves up.
-    if (up[i * 3 + 1] < UPRIGHT || pos[i * 3 + 1] > SUPPORT_MAX) continue;
+    if (up[i * 3 + 1] < UPRIGHT || pos[i * 3 + 1] > SUPPORT_MAX || track.bowlMask?.[i]) continue;
     const base = {
       x: pos[i * 3] - up[i * 3] * 0.6,
       y: pos[i * 3 + 1] - up[i * 3 + 1] * 0.6,
@@ -359,7 +518,11 @@ export function starSpots(track) {
   const [a, b] = rideSpan(track);
   const out = [];
   const every = Math.max(STAR_EVERY, (b - a) * track.step / MAX_STARS); // giant coasters: at most MAX_STARS
-  for (let i = a; i <= b; i += Math.max(1, Math.round(every / track.step))) out.push(i);
+  for (let i = a; i <= b; i += Math.max(1, Math.round(every / track.step))) {
+    // Slide: no ducks in a bowl or bobbing upside down.
+    if (track.bowlMask?.[i] || (track.kind === 'slide' && track.up[i * 3 + 1] < 0.3)) continue;
+    out.push(i);
+  }
   return out;
 }
 
@@ -375,7 +538,7 @@ export function splashSpot(track) {
   let best = null;
   let bestDrop = 0;
   for (let i = a; i <= b; i++) {
-    if (y(i) > SPLASH_LOW || up[i * 3 + 1] < 0.5) continue;
+    if (y(i) > SPLASH_LOW || up[i * 3 + 1] < 0.5 || track.bowlMask?.[i]) continue;
     let isMin = true;
     for (let j = Math.max(0, i - win); j <= Math.min(track.count - 1, i + win) && isMin; j++) if (y(j) < y(i)) isMin = false;
     if (!isMin) continue;
@@ -398,7 +561,7 @@ export function tunnelRuns(track, splash = splashSpot(track)) {
   const [a, b] = rideSpan(track, 14, 32);
   const clear = Math.round(14 / step);
   const ok = (i) =>
-    pos[i * 3 + 1] < TUNNEL_LOW && up[i * 3 + 1] > 0.7 && (splash === null || Math.abs(i - splash) > clear);
+    pos[i * 3 + 1] < TUNNEL_LOW && up[i * 3 + 1] > 0.7 && !track.bowlMask?.[i] && (splash === null || Math.abs(i - splash) > clear);
   const runs = [];
   for (let i = a; i <= b; ) {
     if (!ok(i)) {

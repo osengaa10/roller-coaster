@@ -17,8 +17,168 @@
       { "imports": { "three": "./vendor/three.module.min.js" } }
     </script>
   </head>
-  <body>
-    <section id="draw" class="screen active">
+  <body data-mode="coaster">
+    <section id="pick" class="screen active">
+      <!-- The scene behind the two pictures: a park on the left, a beach on the right. -->
+      <svg id="pick-bg" viewBox="0 0 400 225" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="bg-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3aa6f5" /><stop offset="1" stop-color="#c9ecff" /></linearGradient>
+          <linearGradient id="bg-sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b8fd1" /><stop offset="1" stop-color="#5ad3f0" /></linearGradient>
+        </defs>
+        <rect width="400" height="225" fill="url(#bg-sky)" />
+        <g fill="#ffe14d">
+          <circle cx="200" cy="34" r="16" />
+          <g stroke="#ffe14d" stroke-width="3" stroke-linecap="round" class="spin-slow">
+            <path d="M200 10v-6M200 58v6M176 34h-6M224 34h6M183 17l-4-4M217 51l4 4M183 51l-4 4M217 17l4-4" />
+          </g>
+        </g>
+        <g fill="#fff" class="drift">
+          <g><circle cx="40" cy="40" r="9" /><circle cx="52" cy="34" r="12" /><circle cx="65" cy="40" r="8" /></g>
+          <g><circle cx="300" cy="28" r="8" /><circle cx="311" cy="23" r="11" /><circle cx="323" cy="29" r="7" /></g>
+          <g><circle cx="140" cy="62" r="6" /><circle cx="149" cy="58" r="8" /><circle cx="158" cy="63" r="5" /></g>
+        </g>
+        <g fill="none" stroke="#3c3c46" stroke-width="1.6" stroke-linecap="round" class="flap">
+          <path d="M250 50q4-4 8 0q4-4 8 0" /><path d="M270 40q3-3 6 0q3-3 6 0" /><path d="M120 30q3-3 6 0q3-3 6 0" />
+        </g>
+        <!-- The sea goes first, so the park hills overlap its end. -->
+        <path d="M196 158H410v26H196z" fill="url(#bg-sea)" />
+        <!-- Park: mountains, hills, trees. -->
+        <path d="M-10 170 40 120l22 22 26-34 34 44 30-30 40 48z" fill="#8794ab" />
+        <path d="M34 126l6-6 7 7-5 1zM82 116l6-8 7 9-6 2z" fill="#f4f7fb" />
+        <path d="M-10 175q60-30 120-6t120 4V225H-10z" fill="#5cc94f" />
+        <path d="M-10 200q70-16 140-4t100 4V225H-10z" fill="#4bb33f" />
+        <g>
+          <path d="M22 178l9-22 9 22z" fill="#2f6b3a" /><rect x="29" y="178" width="4" height="6" fill="#6b4a32" />
+          <path d="M60 172l8-19 8 19z" fill="#3a7a45" /><rect x="66" y="172" width="4" height="6" fill="#6b4a32" />
+          <circle cx="104" cy="168" r="9" fill="#5fae44" /><rect x="102" y="172" width="4" height="9" fill="#6b4a32" />
+          <circle cx="150" cy="176" r="7" fill="#74b84c" /><rect x="148" y="179" width="3.5" height="7" fill="#6b4a32" />
+        </g>
+        <g fill="#ff5d73"><circle cx="40" cy="205" r="2" /><circle cx="90" cy="212" r="2" /><circle cx="130" cy="203" r="2" /></g>
+        <g fill="#ffd23f"><circle cx="60" cy="214" r="2" /><circle cx="112" cy="208" r="2" /><circle cx="170" cy="214" r="2" /></g>
+        <!-- Beach: sea, island, sand, palms. -->
+        <path d="M330 162q20-16 44 0z" fill="#3ea85a" />
+        <path d="M352 152q2-10 8-16" stroke="#8a5a3c" stroke-width="2" fill="none" />
+        <path d="M360 136q-8-2-12 4M360 136q8-3 12 3M360 136q-2-6-8-8M360 136q4-6 10-6" stroke="#2f8a48" stroke-width="2.2" fill="none" stroke-linecap="round" />
+        <path d="M232 166q6-3 12 0M262 172q6-3 12 0M296 167q6-3 12 0M390 172q6-3 12 0" stroke="#fff" stroke-width="1.4" fill="none" stroke-linecap="round" class="bob" />
+        <g class="bob"><path d="M290 160h14l-3 4h-8z" fill="#fff" /><path d="M297 159V146l7 13z" fill="#fffdf5" /><path d="M296 159v-11l-5 11z" fill="#ff4d6d" /></g>
+        <path d="M204 225C204 204 212 186 236 181Q300 174 410 180V225z" fill="#f2d49b" />
+        <g>
+          <path d="M252 200q-2-22 10-38" stroke="#9a6a43" stroke-width="4" fill="none" stroke-linecap="round" />
+          <path d="M262 162q-14-4-22 6M262 162q14-5 22 5M262 162q-4-11-16-14M262 162q7-11 18-11M262 162q0 10-6 16" stroke="#3aa654" stroke-width="4" fill="none" stroke-linecap="round" />
+          <path d="M378 204q2-20-8-34" stroke="#9a6a43" stroke-width="3.5" fill="none" stroke-linecap="round" />
+          <path d="M370 170q-12-3-19 5M370 170q12-4 19 4M370 170q-3-9-13-12M370 170q6-9 15-9" stroke="#2f9a44" stroke-width="3.5" fill="none" stroke-linecap="round" />
+        </g>
+        <g><path d="M312 196h22l-11-9z" fill="#ff4d6d" /><path d="M316 196h4l3-9zM326 196h4l-7-9z" fill="#fff" /><path d="M323 196v14" stroke="#eee" stroke-width="1.5" /><rect x="326" y="208" width="14" height="5" fill="#3a86ff" /></g>
+        <path d="M290 214l2.5-5 2.5 5-5-3h5z" fill="#ff8c42" />
+        <circle cx="236" cy="212" r="4.5" fill="#ffd23f" /><path d="M231.5 212h9M236 207.5v9" stroke="#ff4d6d" stroke-width="1.6" />
+      </svg>
+
+      <div class="picks">
+        <button id="pick-coaster" class="pick" aria-label="Roller coaster">
+          <svg viewBox="0 0 160 120">
+            <defs>
+              <linearGradient id="pc-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4fb3ff" /><stop offset="1" stop-color="#c9ecff" /></linearGradient>
+              <path id="pc-track" d="M-6 98H10C30 98 34 34 54 34S72 96 96 96 116 96 122 84 128 56 118 54 102 64 112 82 126 96 140 96H170" />
+            </defs>
+            <rect width="160" height="120" fill="url(#pc-sky)" />
+            <g fill="#ffe14d"><circle cx="138" cy="20" r="9" /><path d="M138 5v-3M138 35v3M123 20h-3M153 20h3M127 9l-2-2M149 31l2 2M127 31l-2 2M149 9l2-2" stroke="#ffe14d" stroke-width="2" stroke-linecap="round" /></g>
+            <g fill="#fff" class="drift"><circle cx="22" cy="20" r="6" /><circle cx="31" cy="16" r="8" /><circle cx="40" cy="21" r="5" /><circle cx="92" cy="14" r="4" /><circle cx="98" cy="11" r="5.5" /><circle cx="105" cy="15" r="3.5" /></g>
+            <path d="M-4 96 22 66l14 14 18-24 22 30 18-18 20 26 26-30 26 32z" fill="#9aa6bd" />
+            <path d="M18 71l4-5 5 5-4 1zM50 61l4-5 5 6-5 1zM120 78l6-8 6 8-5 1z" fill="#f4f7fb" />
+            <rect y="96" width="160" height="24" fill="#5cc94f" />
+            <path d="M0 108q40-6 80 0t80 0v12H0z" fill="#4bb33f" />
+            <g><path d="M6 100l5-13 5 13z" fill="#2f6b3a" /><path d="M144 101l5-13 5 13z" fill="#3a7a45" /><circle cx="80" cy="99" r="5" fill="#5fae44" /></g>
+            <g fill="#ff5d73"><circle cx="20" cy="112" r="1.4" /><circle cx="64" cy="115" r="1.4" /><circle cx="130" cy="113" r="1.4" /></g>
+            <g fill="#ffd23f"><circle cx="40" cy="114" r="1.4" /><circle cx="100" cy="112" r="1.4" /></g>
+            <g stroke="#c7d0e0" stroke-width="2"><path d="M24 96V72M34 96V44M44 96V34M54 96V34M64 96V44M74 96V78M104 96V92M132 96V92" /></g>
+            <use href="#pc-track" fill="none" stroke="#7a4a2a" stroke-width="7" stroke-dasharray="1.6 2.6" />
+            <use href="#pc-track" fill="none" stroke="#e63946" stroke-width="3.2" />
+            <use href="#pc-track" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1" />
+            <g class="twinkle" fill="#ffd23f" stroke="#fff" stroke-width=".6">
+              <path d="M54 22l1.8 3.7 4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.6z" />
+              <path d="M117 42l1.4 2.9 3.2.5-2.3 2.2.5 3.2-2.8-1.5-2.8 1.5.5-3.2-2.3-2.2 3.2-.5z" />
+            </g>
+            <!-- The train rides round and round the track (and the loop). -->
+            <g>
+              <g transform="translate(-9 0)">
+                <rect x="-6" y="-9" width="12" height="7" rx="2.5" fill="#ffd23f" />
+                <circle cx="-3" cy="-1.5" r="1.8" fill="#333" /><circle cx="3" cy="-1.5" r="1.8" fill="#333" />
+              </g>
+              <rect x="-6" y="-9" width="13" height="7" rx="2.5" fill="#ee4266" />
+              <circle cx="-2" cy="-11.5" r="2.6" fill="#f2c6a0" /><path d="M-4.6 -12.5a2.6 2.6 0 0 1 5.2 0z" fill="#6b3e26" />
+              <circle cx="3.8" cy="-11.5" r="2.6" fill="#a0522d" /><circle cx="2" cy="-14" r="1" fill="#a0522d" /><circle cx="5.6" cy="-14" r="1" fill="#a0522d" />
+              <circle cx="-3" cy="-1.5" r="1.8" fill="#333" /><circle cx="4" cy="-1.5" r="1.8" fill="#333" />
+              <circle cx="7" cy="-6" r="1" fill="#fffbe0" />
+              <animateMotion dur="7s" repeatCount="indefinite" rotate="auto" keyPoints="0;0.3;0.55;1" keyTimes="0;0.45;0.65;1" calcMode="linear"><mpath href="#pc-track" /></animateMotion>
+            </g>
+            <g fill="#ff4d6d"><path d="M10 98V82" stroke="#fff" stroke-width="1" /><path d="M10 82l7 2.5-7 2.5z" class="wave" /></g>
+          </svg>
+        </button>
+        <button id="pick-slide" class="pick" aria-label="Water slide">
+          <svg viewBox="0 0 160 120">
+            <defs>
+              <linearGradient id="ps-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2fb8ff" /><stop offset="1" stop-color="#d2f6ff" /></linearGradient>
+              <linearGradient id="ps-sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b8fd1" /><stop offset="1" stop-color="#5ad3f0" /></linearGradient>
+              <linearGradient id="ps-bowl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6b81" /><stop offset="1" stop-color="#d63a52" /></linearGradient>
+              <path id="ps-ride" d="M22 31C40 31 44 52 57 54A16 5 0 0 0 89 55A14 4.5 0 0 0 61 58A12 4 0 0 0 85 61A9 3 0 0 0 67 64A6 2 0 0 0 79 67L73 70V88C76 94 96 94 108 97S130 101 142 102" />
+            </defs>
+            <rect width="160" height="120" fill="url(#ps-sky)" />
+            <g><circle cx="136" cy="18" r="9" fill="#ffd93d" /><path d="M136 4v-3M136 32v3M122 18h-3M150 18h3M126 8l-2-2M146 28l2 2M126 28l-2 2M146 8l2-2" stroke="#ffd93d" stroke-width="2" stroke-linecap="round" />
+              <path d="M130 16h12" stroke="#26262e" stroke-width="1.6" /><ellipse cx="132.5" cy="17" rx="3" ry="2.3" fill="#26262e" /><ellipse cx="139.5" cy="17" rx="3" ry="2.3" fill="#26262e" />
+              <path d="M132 21q4 3 8 0" stroke="#c46a00" stroke-width="1.2" fill="none" stroke-linecap="round" /></g>
+            <g fill="#fff" class="drift"><circle cx="40" cy="14" r="5" /><circle cx="48" cy="10" r="7" /><circle cx="56" cy="15" r="4.5" /></g>
+            <g fill="none" stroke="#3c3c46" stroke-width="1.1" stroke-linecap="round" class="flap"><path d="M96 16q2.5-2.5 5 0q2.5-2.5 5 0" /><path d="M108 26q2-2 4 0q2-2 4 0" /></g>
+            <rect y="82" width="160" height="12" fill="url(#ps-sea)" />
+            <path d="M118 84q10-10 24 0z" fill="#3ea85a" />
+            <path d="M103 82l4-14 6 14z" fill="#6d8a5a" /><path d="M105 75q1-4 3-6" stroke="#9a9a9a" stroke-width="2" fill="none" class="puff" />
+            <g class="bob"><path d="M8 84h10l-2 3h-6z" fill="#fff" /><path d="M13 83v-9l5 9z" fill="#fffdf5" /></g>
+            <path d="M2 87q3-2 6 0M30 90q3-2 6 0M146 88q3-2 6 0" stroke="#fff" stroke-width="1" fill="none" stroke-linecap="round" />
+            <rect y="94" width="160" height="26" fill="#f2d49b" />
+            <g fill="#ff8c42"><path d="M150 112l1.6-3.4 1.6 3.4-3.2-2.2h3.2z" /></g>
+            <path d="M118 113q2-3 4 0z" fill="#ffc2d1" />
+            <!-- Tower with stairs, a striped canopy and a flag. -->
+            <g stroke="#ff8c42" stroke-width="2.2"><path d="M10 34V96M28 34V96" /></g>
+            <g stroke="#ff8c42" stroke-width="1"><path d="M10 44 28 58M28 44 10 58M10 60 28 74M28 60 10 74M10 76 28 90M28 76 10 90" /></g>
+            <g stroke="#d9a066" stroke-width="1.6" fill="none"><path d="M2 96 10 80 2 64 10 48 2 34" /></g>
+            <rect x="6" y="31" width="26" height="3" fill="#d9a066" />
+            <g><path d="M19 12 4 22h30z" fill="#ff4d6d" /><path d="M19 12 9 22h5zM19 12l5 10h5z" fill="#fff" /><path d="M6 22v9M32 22v9" stroke="#fff" stroke-width="1.2" /><path d="M19 12V4" stroke="#fff" stroke-width=".8" /><path d="M19 4l6 2-6 2z" fill="#ffd23f" class="wave" /></g>
+            <!-- The slide, the toilet bowl, and the pool. -->
+            <g stroke="#fff" stroke-width="1.4"><path d="M40 96V40M50 96V52M100 96V92M120 96V98" /></g>
+            <path d="M22 31C40 31 44 52 57 54" fill="none" stroke="#2b5fb3" stroke-width="7.5" stroke-linecap="round" />
+            <path d="M22 31C40 31 44 52 57 54" fill="none" stroke="#3a86ff" stroke-width="6" stroke-linecap="round" />
+            <path d="M22 31C40 31 44 52 57 54" fill="none" stroke="#bfe6ff" stroke-width="2" stroke-dasharray="3 3" class="flow" />
+            <path d="M57 74 61 96M89 74 85 96" stroke="#fff" stroke-width="1.4" />
+            <rect x="70" y="70" width="6" height="18" fill="#8b9bb3" />
+            <path d="M55 55C56 66 68 70 70 74H76C78 70 90 66 91 55z" fill="url(#ps-bowl)" />
+            <path d="M58 62q15 8 30-2M62 68q11 5 22-1" stroke="rgba(255,255,255,.6)" stroke-width="1.4" fill="none" />
+            <ellipse cx="73" cy="55" rx="18.5" ry="5.6" fill="#fff" />
+            <ellipse cx="73" cy="55" rx="16" ry="4.4" fill="#5ad3f0" />
+            <g class="swirl"><path d="M73 55m-12 0a12 3.4 0 1 0 24 0a9 2.5 0 1 0-18 0a6 1.6 0 1 0 12 0" fill="none" stroke="#fff" stroke-width=".9" /></g>
+            <ellipse cx="73" cy="55" rx="2.2" ry=".8" fill="#1b4a7a" />
+            <path d="M73 88C76 94 96 94 108 97S130 101 142 102" fill="none" stroke="#2b5fb3" stroke-width="7.5" stroke-linecap="round" />
+            <path d="M73 88C76 94 96 94 108 97S130 101 142 102" fill="none" stroke="#3a86ff" stroke-width="6" stroke-linecap="round" />
+            <path d="M73 88C76 94 96 94 108 97S130 101 142 102" fill="none" stroke="#bfe6ff" stroke-width="2" stroke-dasharray="3 3" class="flow" />
+            <rect x="122" y="99" width="38" height="11" rx="4" fill="#fff" />
+            <rect x="124" y="100.5" width="34" height="8" rx="3" fill="#4fd2f0" />
+            <g fill="#fff" class="splash"><circle cx="142" cy="97" r="2" /><circle cx="148" cy="93" r="2.4" /><circle cx="154" cy="97" r="1.8" /><circle cx="145" cy="90" r="1.3" /><circle cx="151" cy="89" r="1.2" /></g>
+            <!-- A rubber duck, and the ring float with him and his friend one behind the other. -->
+            <g transform="translate(104 95)"><ellipse rx="3.4" ry="2.4" fill="#ffd23f" /><circle cx="2.4" cy="-2.6" r="1.8" fill="#ffd23f" /><path d="M4 -2.8l2 .6-2 .8z" fill="#ff8c42" /><circle cx="2.8" cy="-3" r=".45" fill="#111" /></g>
+            <g>
+              <g transform="translate(0 -2)">
+                <ellipse cx="-4" cy="0" rx="4.4" ry="2.2" fill="#ff8c42" /><ellipse cx="4" cy="0" rx="4.4" ry="2.2" fill="#ffd23f" />
+                <circle cx="-4" cy="-3.6" r="2.6" fill="#f2c6a0" /><path d="M-6.6 -4.4a2.6 2.6 0 0 1 5.2 0z" fill="#6b3e26" /><path d="M-6.4 -5h4.8" stroke="#2ec4b6" stroke-width="1" />
+                <circle cx="4.2" cy="-3.6" r="2.6" fill="#5cc94f" /><circle cx="3.2" cy="-5.8" r="1.1" fill="#fff" /><circle cx="5.4" cy="-5.8" r="1.1" fill="#fff" />
+              </g>
+              <animateMotion dur="8s" repeatCount="indefinite" rotate="auto"><mpath href="#ps-ride" /></animateMotion>
+            </g>
+            <g transform="translate(96 108)"><path d="M0 0h18l-9-7z" fill="#3a86ff" /><path d="M4 0h3l2-7zM11 0h3l-5-7z" fill="#fff" /><path d="M9 0v8" stroke="#eee" stroke-width="1" /></g>
+            <circle cx="60" cy="110" r="3.6" fill="#ff4d6d" /><path d="M56.4 110h7.2M60 106.4v7.2" stroke="#fff" stroke-width="1.2" />
+          </svg>
+        </button>
+      </div>
+    </section>
+
+    <section id="draw" class="screen">
       <canvas id="pad"></canvas>
       <div id="hand" aria-hidden="true">👆</div>
       <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -59,6 +219,10 @@
         </button>
       </div>
 
+      <button id="picker" class="btn purple" aria-label="Pick coaster or water slide">
+        <svg viewBox="0 0 48 48"><path d="M6 24 24 8l18 16M11 20v20h26V20" /><path class="fill" d="M20 40V29h8v11z" /></svg>
+      </button>
+
       <button id="go" class="btn green big" aria-label="Ride it">
         <svg viewBox="0 0 48 48"><path class="fill" d="M15 8v32l26-16z" /></svg>
       </button>
@@ -67,6 +231,7 @@
     <section id="ride" class="screen">
       <canvas id="view"></canvas>
       <div id="speedfx" aria-hidden="true"></div>
+      <div id="drips" aria-hidden="true"></div>
       <div class="corner top-left">
         <button id="home" class="btn purple" aria-label="Back to drawing">
           <svg viewBox="0 0 48 48"><path d="M6 24 24 8l18 16M11 20v20h26V20" /><path class="fill" d="M20 40V29h8v11z" /></svg>
@@ -76,7 +241,7 @@
           <svg class="seat" viewBox="0 0 48 48"><path d="M8 30h32l-4 10H12zM14 30V12a4 4 0 0 1 4-4h12a4 4 0 0 1 4 4v18" /></svg>
         </button>
       </div>
-      <div id="hud" aria-hidden="true"><span class="star">⭐</span><span id="hud-count">0</span></div>
+      <div id="hud" aria-hidden="true"><span id="hud-icon" class="star">⭐</span><span id="hud-count">0</span></div>
       <div id="finish">
         <div id="confetti"></div>
         <div id="tally" aria-hidden="true"></div>

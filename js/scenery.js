@@ -8,13 +8,13 @@ const SPINE_DROP = 0.6; // spine center below the rails
 const HIGH = 300; // meters: above this, track geometry is built with less detail
 
 // Fresh (uncached) materials, so a track's world can be disposed in one go.
-const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
+export const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
 // Painted steel: picks up a highlight from the sun.
-const shiny = (color, extra = {}) => new THREE.MeshPhongMaterial({ color, shininess: 70, specular: '#4d4d4d', ...extra });
+export const shiny = (color, extra = {}) => new THREE.MeshPhongMaterial({ color, shininess: 70, specular: '#4d4d4d', ...extra });
 
-const Y_AXIS = new THREE.Vector3(0, 1, 0);
+export const Y_AXIS = new THREE.Vector3(0, 1, 0);
 // Matrix for a unit cylinder (radius 1, height 1, centered) stretched from a to b.
-function beam(m, a, b, r) {
+export function beam(m, a, b, r) {
   const dir = new THREE.Vector3().subVectors(b, a);
   const len = dir.length();
   const q = new THREE.Quaternion().setFromUnitVectors(Y_AXIS, dir.divideScalar(len || 1));
@@ -212,7 +212,7 @@ export function makeTrackWorld(tr, eye) {
   };
   g.add(makeLandscape(box, keepOut, nearTrack));
 
-  return { group: g, stars, splash, tunnels };
+  return { group: g, pickups: stars, splash, tunnels };
 }
 
 function makeStarGeometry() {
@@ -232,7 +232,8 @@ function makeStarGeometry() {
 // A tube following a centerline, using the track's own frames so it twists with loops.
 // arc: only build the top part of the ring (+-arc radians from "up"); toGround: drop both
 // edges straight down to the grass, for tunnel walls. colorAt: per-sample vertex colors.
-function tube(ids, center, up, side, radius, { sides = 8, arc = null, toGround = false, colorAt = null } = {}) {
+// uv: texture coordinates, u around the ring (0..1) and v along it (meters, from `along`).
+export function tube(ids, center, up, side, radius, { sides = 8, arc = null, toGround = false, colorAt = null, uv = null } = {}) {
   const ring = arc === null ? sides : sides + 1 + (toGround ? 2 : 0);
   const n = ids.length;
   const verts = new Float32Array(n * ring * 3);
@@ -260,6 +261,7 @@ function tube(ids, center, up, side, radius, { sides = 8, arc = null, toGround =
       if (colors) colors.set(rgb, o);
     }
   });
+  if (uv) return uvTube(verts, normals, colors, n, ring, arc === null, ids.map(uv));
   const index = [];
   const wrap = arc === null;
   for (let i = 0; i < n - 1; i++) {
@@ -275,6 +277,40 @@ function tube(ids, center, up, side, radius, { sides = 8, arc = null, toGround =
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   if (colors) geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setIndex(index);
+  return geo;
+}
+
+// Same tube, with texture coordinates (a closed ring gets one extra column so u runs 0..1).
+function uvTube(verts, normals, colors, n, ring, wrap, along) {
+  const cols = wrap ? ring + 1 : ring;
+  const pos = new Float32Array(n * cols * 3);
+  const nor = new Float32Array(n * cols * 3);
+  const col = colors ? new Float32Array(n * cols * 3) : null;
+  const uvs = new Float32Array(n * cols * 2);
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < cols; k++) {
+      const src = (i * ring + (k % ring)) * 3;
+      const dst = (i * cols + k) * 3;
+      pos.set(verts.subarray(src, src + 3), dst);
+      nor.set(normals.subarray(src, src + 3), dst);
+      if (col) col.set(colors.subarray(src, src + 3), dst);
+      uvs.set([k / (cols - 1), along[i]], (i * cols + k) * 2);
+    }
+  }
+  const index = [];
+  for (let i = 0; i < n - 1; i++) {
+    for (let k = 0; k < cols - 1; k++) {
+      const a = i * cols + k;
+      const b = a + 1;
+      index.push(a, a + cols, b, b, a + cols, b + cols);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  if (col) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.setIndex(index);
   return geo;
 }

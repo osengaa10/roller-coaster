@@ -58,6 +58,51 @@ export class Effects {
     }
   }
 
+  // Bubbles fizzing up (a duck scooped up, water jets).
+  bubbles(at, carry = new THREE.Vector3(), count = 30) {
+    this.burst({
+      at,
+      count,
+      colors: ['#ffffff', '#d8f4ff', '#9fe1ff'],
+      velocity: () => new THREE.Vector3((Math.random() - 0.5) * 3, 1.5 + Math.random() * 3, (Math.random() - 0.5) * 3).add(carry),
+      gravity: -2,
+      drag: 1.5,
+      life: 0.9,
+      size: 0.22,
+    });
+  }
+
+  // Splashing down into the pool: walls of water thrown out both sides and up ahead.
+  bigSplash(at, fwd, side) {
+    for (const s of [-1, 1]) {
+      this.burst({
+        at: at.clone().addScaledVector(side, s * 0.8),
+        count: 180,
+        colors: ['#ffffff', '#bfe6ff', '#7cc6ff'],
+        velocity: () =>
+          new THREE.Vector3()
+            .addScaledVector(side, s * (3 + Math.random() * 6))
+            .addScaledVector(fwd, 2 + Math.random() * 6)
+            .add(new THREE.Vector3(0, 5 + Math.random() * 9, 0)),
+        gravity: 14,
+        life: 1.6,
+        size: 0.5,
+      });
+    }
+  }
+
+  // The finish at the water park: colored fountains shooting up around the pool, again and again.
+  fountainShow(center, fwd, count = 8) {
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const palette = ['#ff4d6d', '#ffd23f', '#3bceac', '#3a86ff', '#c77dff', '#ff8c42'];
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      const at = center.clone().addScaledVector(fwd, Math.cos(a) * 14).addScaledVector(right, Math.sin(a) * 10);
+      at.y = 0.5;
+      this.list.push(new Fountain(this, at, [palette[i % palette.length], '#ffffff'], 0.2 + (i % 4) * 0.35));
+    }
+  }
+
   // A show of rockets in front of the camera.
   fireworks(camera, count = 7) {
     // Aim where the camera is looking, so they show up in the seat view and the outside view.
@@ -80,7 +125,7 @@ export class Effects {
 
 // Soft round dot so particles aren't little squares.
 let dotTexture = null;
-function getDot() {
+export function getDot() {
   if (dotTexture) return dotTexture;
   const c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -189,6 +234,88 @@ class Rocket {
     this.dot.geometry.dispose();
     this.dot.material.dispose();
   }
+}
+
+// A jet of colored water that spurts a few times, then stops.
+class Fountain {
+  constructor(effects, at, colors, delay) {
+    this.effects = effects;
+    this.at = at;
+    this.colors = colors;
+    this.next = delay;
+    this.left = 5;
+    this.age = 0;
+  }
+
+  update(dt) {
+    this.age += dt;
+    if (this.age >= this.next && this.left > 0) {
+      this.left--;
+      this.next += 0.9 + Math.random() * 0.4;
+      this.effects.burst({
+        at: this.at,
+        count: 90,
+        colors: this.colors,
+        velocity: () => new THREE.Vector3((Math.random() - 0.5) * 2.5, 13 + Math.random() * 5, (Math.random() - 0.5) * 2.5),
+        gravity: 12,
+        drag: 0.2,
+        life: 2.2,
+        size: 0.7,
+      });
+      sound.fountain();
+    }
+    return this.left > 0;
+  }
+}
+
+// Spray thrown up behind the raft (rooster tail), more the faster it goes. One recycled set of
+// points, so it costs the same however long the ride.
+export function makeSprayTrail(scene, count = 160) {
+  const pos = new Float32Array(count * 3);
+  const vel = Array.from({ length: count }, () => new THREE.Vector3());
+  const age = new Float32Array(count).fill(9);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const material = new THREE.PointsMaterial({ color: '#e8f8ff', size: 0.32, map: getDot(), transparent: true, depthWrite: false, opacity: 0.85 });
+  const points = new THREE.Points(geo, material);
+  points.frustumCulled = false;
+  scene.add(points);
+  let next = 0;
+  let carry = 0;
+  return {
+    points,
+    // at: back of the raft; back: direction behind it; up, side: the raft's frame.
+    update(dt, on, at, back, up, side, speed) {
+      points.visible = on;
+      if (!on) return;
+      carry += dt * Math.min(120, speed * 9);
+      while (carry >= 1) {
+        carry -= 1;
+        const k = next;
+        next = (next + 1) % count;
+        const s = Math.random() < 0.5 ? -1 : 1;
+        pos.set([at.x + side.x * s * 0.5, at.y + side.y * s * 0.5 + 0.1, at.z + side.z * s * 0.5], k * 3);
+        vel[k]
+          .copy(back)
+          .multiplyScalar(speed * (0.15 + Math.random() * 0.2))
+          .addScaledVector(up, 1.5 + Math.random() * 2.5 + speed * 0.12)
+          .addScaledVector(side, s * (0.5 + Math.random() * 1.5));
+        age[k] = 0;
+      }
+      for (let k = 0; k < count; k++) {
+        if (age[k] > 1) {
+          pos[k * 3 + 1] = -1000;
+          continue;
+        }
+        age[k] += dt;
+        vel[k].y -= 9.8 * dt;
+        pos[k * 3] += vel[k].x * dt;
+        pos[k * 3 + 1] += vel[k].y * dt;
+        pos[k * 3 + 2] += vel[k].z * dt;
+      }
+      geo.attributes.position.needsUpdate = true;
+    },
+  };
 }
 
 // Wind streaks rushing past the camera when the train is really flying (child of the camera).

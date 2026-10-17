@@ -1,24 +1,33 @@
-// The ride: moves the train along the track, runs the camera, and fires off the fun bits.
+// The ride: moves the train (or the raft, on the water slide) along the track, runs the camera,
+// and fires off the fun bits.
 import * as THREE from 'three';
 import { V_MAX } from './track.js';
 import * as sound from './sound.js';
 import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree } from './scenery.js';
-import { makeSeatCar, makeTrainCar, makeRider, makeHands, FRIENDS, FRIEND_SEAT } from './characters.js';
-import { Effects, makeStreaks } from './effects.js';
+import { makeSlideWorld } from './slide-world.js';
+import { makeBeachStaticWorld } from './tropical.js';
+import { makeSeatCar, makeTrainCar, makeRider, makeHands, makeRaft, makeSeatRaft, FRIENDS, FRIEND_SEAT, FRIEND_RAFT, RING_Z } from './characters.js';
+import { Effects, makeStreaks, makeSprayTrail } from './effects.js';
 import { makeSky, SUN_DIR, EARTH_R } from './nature.js';
 
 const EYE = 1.3; // seat height above the track
+const RAFT_EYE = 0.95; // sitting low in a ring float
 const LOOK_AHEAD = 6; // meters
 const START_DELAY = 1.3; // seconds sitting in the station before rolling
 const CAR_GAP = 2.7; // meters between train cars
-// Sky colors (overhead / at the horizon), for day and for the sunset at the finish.
-const TOP = new THREE.Color('#2f7fd8');
-const HORIZON = new THREE.Color('#cfe8fb');
+// Sky colors (overhead / at the horizon), for day and for the sunset at the finish. The water
+// park's sky is a little more tropical turquoise.
+const SKIES = {
+  coaster: { top: new THREE.Color('#2f7fd8'), horizon: new THREE.Color('#cfe8fb'), ground: new THREE.Color('#4a7a3a') },
+  slide: { top: new THREE.Color('#1c95e6'), horizon: new THREE.Color('#d4f6ff'), ground: new THREE.Color('#c9b07a') },
+};
 const DUSK_TOP = new THREE.Color('#3a3f8f');
 const DUSK_HORIZON = new THREE.Color('#f4a37c');
 const SPACE = new THREE.Color('#060820');
 const SPACE_FROM = 150; // meters: the sky starts getting darker
 const SPACE_TO = 1300; // meters: full outer space (the change is spread out on a log scale)
+
+const wrapAngle = (a) => a - Math.PI * 2 * Math.round(a / (Math.PI * 2));
 
 export class Ride {
   constructor(canvas, { onFinish = () => {}, onStar = () => {} } = {}) {
@@ -28,17 +37,20 @@ export class Ride {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(HORIZON.clone(), 250, 2600); // haze: far things fade into the sky
+    this.scene.fog = new THREE.Fog(SKIES.coaster.horizon.clone(), 250, 2600); // haze: far things fade into the sky
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 4000);
     this.scene.add(this.camera);
 
-    this.scene.add(new THREE.HemisphereLight('#dcefff', '#4a7a3a', 1.2));
+    this.hemi = new THREE.HemisphereLight('#dcefff', '#4a7a3a', 1.2);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight('#fff1d6', 2.3);
     sun.position.copy(SUN_DIR).multiplyScalar(300);
     this.scene.add(sun);
     this.skyDome = makeSky();
     this.scene.add(this.skyDome.mesh);
-    this.scene.add(makeStaticWorld());
+    // Scenery that never changes: built once per game, the other one hidden.
+    this.statics = { coaster: makeStaticWorld() };
+    this.scene.add(this.statics.coaster);
     this.space = makeSpace();
     this.scene.add(this.space.group);
 
@@ -46,28 +58,33 @@ export class Ride {
     this.streaks = makeStreaks();
     this.camera.add(this.streaks.lines);
     this.speedfx = document.getElementById('speedfx');
+    this.drips = document.getElementById('drips');
     this.fovBoost = 0;
 
-    // Front-seat view: the car nose and his own arms hang off the camera.
+    // Front-seat view: the car nose (or his ring float) and his own arms hang off the camera.
     this.seatCar = makeSeatCar();
+    this.seatRaft = makeSeatRaft(RAFT_EYE);
     this.hands = makeHands();
-    this.camera.add(this.seatCar, this.hands.group);
+    this.camera.add(this.seatCar, this.seatRaft, this.hands.group);
 
-    // Outside view: a real train with him and his friend in the front car.
+    // Outside view: a real train with him and his friend in the front car, or the two of them
+    // on a ring float, one behind the other.
     this.cars = [
       makeTrainCar('#ee4266', true),
       makeTrainCar('#ffd23f'),
       makeTrainCar('#3bceac'),
     ];
     this.scene.add(...this.cars);
+    this.raft = makeRaft();
+    this.scene.add(this.raft);
+    this.spray = makeSprayTrail(this.scene);
     this.kid = makeRider('kid');
-    this.kid.group.position.set(-0.45, 0.55, -0.3);
-    this.cars[0].add(this.kid.group);
     this.friend = null;
     this.friendKind = null;
 
     this.effects = new Effects(this.scene);
-    this.mode = 'outside'; // start watching the train from outside; the eye button switches to the front seat
+    this.mode = 'outside'; // start watching from outside; the eye button switches to the front seat
+    this.kind = 'coaster';
     this.world = null;
     this.running = false;
     this.camUp = new THREE.Vector3(0, 1, 0);
@@ -81,6 +98,14 @@ export class Ride {
     this.loop = this.loop.bind(this);
   }
 
+  get slide() {
+    return this.kind === 'slide';
+  }
+
+  get eye() {
+    return this.slide ? RAFT_EYE : EYE;
+  }
+
   resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -92,18 +117,38 @@ export class Ride {
     this.camera.updateProjectionMatrix();
   }
 
-  start(track) {
+  start(track, kind = 'coaster') {
+    this.kind = kind;
     if (this.track !== track) {
       if (this.world) {
         this.scene.remove(this.world.group);
         disposeTree(this.world.group);
       }
       this.track = track;
-      this.world = makeTrackWorld(track, EYE);
+      this.world = this.slide ? makeSlideWorld(track, RAFT_EYE) : makeTrackWorld(track, EYE);
       this.scene.add(this.world.group);
       this.space.place(track.pos[(track.count >> 1) * 3]);
     }
-    for (const star of this.world.stars) star.holder.visible = true;
+    if (this.slide && !this.statics.slide) {
+      this.statics.slide = makeBeachStaticWorld();
+      this.scene.add(this.statics.slide);
+    }
+    for (const [k, group] of Object.entries(this.statics)) group.visible = k === kind;
+    this.sky = SKIES[kind];
+    this.hemi.groundColor.copy(this.sky.ground);
+    this.streaks.lines.material.color.set(this.slide ? '#d8f4ff' : '#ffffff');
+    for (const p of this.world.pickups) p.holder.visible = true;
+
+    // His seat: the front car of the train, or the back ring of the float.
+    this.kid.group.removeFromParent();
+    if (this.slide) {
+      this.kid.group.position.set(0, 0.1, -RING_Z);
+      this.raft.add(this.kid.group);
+    } else {
+      this.kid.group.position.set(-0.45, 0.55, -0.3);
+      this.cars[0].add(this.kid.group);
+    }
+    this.kid.goggles.visible = this.slide;
 
     // A different animal friend every ride.
     if (this.friend) this.friend.group.removeFromParent();
@@ -120,18 +165,30 @@ export class Ride {
     this.starCount = 0;
     this.nextTunnel = 0;
     this.splashed = false;
+    this.nextBowl = 0;
+    this.nextDrain = 0;
+    this.pooled = false;
+    this.lastJet = -1;
+    this.raftYaw = 0;
+    this.bowlCam = 0;
     this.cheer = 0;
     this.handsTimer = 0;
     this.lastYay = -1;
     this.finished = false;
     this.dusk = 0;
     this.effects.clear();
+    this.drips?.replaceChildren();
     this.camUp.set(0, 1, 0);
     this.applyMode(true);
     this.running = true;
     this.last = performance.now();
-    sound.bell();
-    sound.windStart();
+    if (this.slide) {
+      sound.whistle();
+      sound.waterStart();
+    } else {
+      sound.bell();
+      sound.windStart();
+    }
     requestAnimationFrame(this.loop);
   }
 
@@ -139,7 +196,9 @@ export class Ride {
     this.running = false;
     this.effects.clear();
     if (this.speedfx) this.speedfx.style.opacity = '0';
+    this.drips?.replaceChildren();
     sound.windStop();
+    sound.waterStop();
   }
 
   toggleMode() {
@@ -150,16 +209,24 @@ export class Ride {
 
   applyMode(snap) {
     const seat = this.mode === 'seat';
-    this.seatCar.visible = seat;
-    for (const car of this.cars) car.visible = !seat;
+    this.seatCar.visible = seat && !this.slide;
+    this.seatRaft.visible = seat && this.slide;
+    for (const car of this.cars) car.visible = !seat && !this.slide;
+    this.raft.visible = !seat && this.slide;
     const f = this.friend.group;
     f.removeFromParent();
     if (seat) {
       // Sitting just ahead and to the right, turned to look at him.
-      f.position.set(FRIEND_SEAT.x, FRIEND_SEAT.y, FRIEND_SEAT.z);
-      f.rotation.set(0, -0.6, 0);
-      f.scale.setScalar(0.75);
+      const at = this.slide ? FRIEND_RAFT : FRIEND_SEAT;
+      f.position.set(at.x, at.y, at.z);
+      f.rotation.set(0, this.slide ? -0.5 : -0.6, 0);
+      f.scale.setScalar(this.slide ? 0.7 : 0.75);
       this.camera.add(f);
+    } else if (this.slide) {
+      f.position.set(0, 0.1, RING_Z);
+      f.rotation.set(0, 0, 0);
+      f.scale.setScalar(1);
+      this.raft.add(f);
     } else {
       f.position.set(0.45, 0.55, -0.3);
       f.rotation.set(0, 0, 0);
@@ -187,6 +254,7 @@ export class Ride {
     const dt = Math.min(0.1, (now - this.last) / 1000) * this.timeScale;
     this.last = now;
     this.time += dt;
+    this.dt = dt;
     const tr = this.track;
 
     if (!this.finished && this.time > START_DELAY) {
@@ -195,6 +263,7 @@ export class Ride {
       this.s = Math.min(tr.length, this.s + this.v * dt);
       this.triggers();
     }
+    if (this.slide) this.spinRaft(dt);
 
     // Characters
     this.handsTimer = Math.max(0, this.handsTimer - dt);
@@ -206,7 +275,8 @@ export class Ride {
     this.kid.update(dt, handsUp ? 1 : 0, speed01);
     this.friend.update(dt, handsUp || this.cheer > 0 ? 1 : 0, speed01);
 
-    for (const star of this.world.stars) if (star.holder.visible) star.spin.rotation.y += dt * 3;
+    for (const p of this.world.pickups) if (p.holder.visible) p.spin.rotation.y += dt * (p.spinRate ?? 3);
+    this.world.update?.(dt, this.time);
     this.effects.update(dt);
     if (this.finished) this.dusk = Math.min(1, this.dusk + dt * 0.5);
 
@@ -217,6 +287,24 @@ export class Ride {
     this.updateSky();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.loop);
+  }
+
+  // The ring float turns as it goes: a lazy sway on the slide, round and round in a bowl.
+  spinRaft(dt) {
+    const tr = this.track;
+    const i = Math.min(tr.count - 1, Math.round(this.s / tr.step));
+    const bowl = tr.bowls.find((b) => i >= b.spiralStart && i <= b.drainEnd);
+    if (bowl && !this.finished) {
+      const p = this.vec(tr.pos, this.s);
+      const rho = Math.max(1.5, Math.hypot(p.x - bowl.center.x, p.z - bowl.center.z));
+      this.raftYaw += dt * Math.min(4, (this.v / rho) * 0.7);
+    } else {
+      this.raftYaw = wrapAngle(this.raftYaw);
+      const target = this.finished ? this.raftYaw : 0.35 * Math.sin(this.time * 0.6);
+      this.raftYaw += (target - this.raftYaw) * Math.min(1, dt * 0.8);
+    }
+    this.bowlCam += ((bowl ? 1 : 0) - this.bowlCam) * Math.min(1, dt * 1.2);
+    this.inBowl = bowl || null;
   }
 
   // The faster he goes, the wider the view, the more it rumbles, and the more wind streaks by.
@@ -233,7 +321,7 @@ export class Ride {
     this.camera.updateProjectionMatrix();
     if (this.v > 0 && !this.finished) {
       const t = this.time;
-      const amp = (seat ? 0.05 : 0.08) * ramp(6, 35);
+      const amp = (seat ? 0.05 : 0.08) * ramp(6, 35) * (this.slide ? 0.6 : 1); // water is smoother than steel
       this.camera.translateX(amp * (Math.sin(t * 31) * 0.6 + Math.sin(t * 53 + 1.3) * 0.4));
       this.camera.translateY(amp * (Math.sin(t * 37 + 0.7) * 0.6 + Math.sin(t * 67) * 0.4));
       this.camera.rotateZ(amp * 0.1 * Math.sin(t * 43));
@@ -251,8 +339,8 @@ export class Ride {
     const horizon = Math.sqrt(2 * EARTH_R * Math.max(h, 0));
     this.camera.far = Math.max(4000, horizon * 1.3 + 2000);
     const u = this.skyDome.uniforms;
-    u.top.value.copy(TOP).lerp(DUSK_TOP, this.dusk);
-    u.horizon.value.copy(HORIZON).lerp(DUSK_HORIZON, this.dusk);
+    u.top.value.copy(this.sky.top).lerp(DUSK_TOP, this.dusk);
+    u.horizon.value.copy(this.sky.horizon).lerp(DUSK_HORIZON, this.dusk);
     u.spaceMix.value = space;
     this.skyDome.mesh.position.copy(this.camera.position);
     this.scene.fog.color.copy(u.horizon.value).lerp(SPACE, space);
@@ -265,31 +353,52 @@ export class Ride {
   triggers() {
     const tr = this.track;
     const i = Math.round(this.s / tr.step);
-    sound.windSpeed(Math.min(1, this.v / V_MAX));
+    if (this.slide) sound.waterSpeed(Math.min(1, this.v / 25), !!tr.enclosed[Math.min(i, tr.count - 1)]);
+    else sound.windSpeed(Math.min(1, this.v / V_MAX));
 
-    if (tr.lift[i] && this.s - this.lastClack > 1.2 && this.time - (this.lastClackTime || 0) > 0.09) {
-      this.lastClack = this.s;
-      this.lastClackTime = this.time;
-      sound.clack();
+    if (tr.lift[i]) {
+      if (this.slide) {
+        // Water jets: a hiss and a fizz of bubbles every so often.
+        if (this.time - this.lastJet > 0.4) {
+          this.lastJet = this.time;
+          sound.jet();
+          this.effects.bubbles(this.vec(tr.pos, this.s + 1.5), this.vec(tr.tan, this.s).multiplyScalar(this.v), 12);
+        }
+      } else if (this.s - this.lastClack > 1.2 && this.time - (this.lastClackTime || 0) > 0.09) {
+        this.lastClack = this.s;
+        this.lastClackTime = this.time;
+        sound.clack();
+      }
     }
     while (this.nextWhee < tr.whee.length && tr.whee[this.nextWhee] <= i) {
       this.nextWhee++;
       this.cheer = 1.8;
       sound.whee();
     }
-    const stars = this.world.stars;
-    while (this.nextStar < stars.length && this.s >= stars[this.nextStar].s - 3) {
-      const star = stars[this.nextStar++];
-      star.holder.visible = false;
-      this.effects.sparkle(star.at, this.vec(tr.tan, star.s).multiplyScalar(this.v));
+    const pickups = this.world.pickups;
+    while (this.nextStar < pickups.length && this.s >= pickups[this.nextStar].s - 3) {
+      const p = pickups[this.nextStar++];
+      p.holder.visible = false;
+      const carry = this.vec(tr.tan, p.s).multiplyScalar(this.v);
       this.starCount++;
-      sound.ding(this.starCount);
+      if (this.slide) {
+        this.effects.bubbles(p.at, carry);
+        sound.quack(this.starCount);
+      } else {
+        this.effects.sparkle(p.at, carry);
+        sound.ding(this.starCount);
+      }
       this.onStar(this.starCount);
     }
     const tunnels = this.world.tunnels;
     while (this.nextTunnel < tunnels.length && this.s >= tunnels[this.nextTunnel][0] * tr.step - 4) {
       this.nextTunnel++;
-      sound.whoosh();
+      if (this.slide) {
+        // Through the waterfall into the cave.
+        sound.waterfall();
+        this.wetLens(14);
+        this.cheer = 1.2;
+      } else sound.whoosh();
     }
     const splash = this.world.splash;
     if (!this.splashed && splash !== null && this.s >= splash * tr.step - 1) {
@@ -300,21 +409,83 @@ export class Ride {
       this.effects.splash(this.vec(tr.pos, this.s), side);
       this.cheer = 1.8;
       sound.splash();
+      if (this.slide) this.wetLens(18);
     }
+    if (this.slide) this.slideTriggers(i);
 
     if (this.s >= tr.length - 0.01) {
       this.finished = true;
       this.v = 0;
       sound.windStop();
+      sound.waterStop();
       sound.cheer();
-      this.effects.fireworks(this.camera);
+      if (this.slide) {
+        const pool = this.world.pool;
+        this.effects.fountainShow(new THREE.Vector3(pool.center.x, 0, pool.center.z), new THREE.Vector3(pool.dir.x, 0, pool.dir.z).normalize());
+      } else this.effects.fireworks(this.camera);
       this.onFinish(this.starCount);
     }
   }
 
-  placeTrain() {
-    if (this.mode === 'seat') return;
+  // Water slide extras: round the toilet bowls, down the drain, and the splash into the pool.
+  slideTriggers(i) {
     const tr = this.track;
+    const bowls = tr.bowls;
+    if (this.nextBowl < bowls.length && i >= bowls[this.nextBowl].spiralStart) {
+      const b = bowls[this.nextBowl++];
+      let secs = 0;
+      for (let k = b.spiralStart; k < b.spiralEnd; k++) secs += tr.step / tr.speed[k];
+      sound.swirl(Math.min(6, Math.max(1.5, secs / this.timeScale)));
+      this.cheer = 1.8;
+    }
+    if (this.nextDrain < bowls.length && i >= bowls[this.nextDrain].drainStart) {
+      this.nextDrain++;
+      sound.flush();
+      setTimeout(() => this.running && sound.whee(), 350 / this.timeScale);
+      this.cheer = 2.2;
+      this.wetLens(10);
+    }
+    if (!this.pooled && i >= tr.pool.start) {
+      this.pooled = true;
+      const up = this.vec(tr.up, this.s);
+      const tan = this.vec(tr.tan, this.s);
+      const side = new THREE.Vector3().crossVectors(up, tan).normalize();
+      this.effects.bigSplash(this.vec(tr.pos, this.s), tan, side);
+      sound.bigSplash();
+      this.wetLens(26);
+      this.cheer = 2.5;
+    }
+  }
+
+  // Drops of water land on the "lens" and run down the screen (fewer when watching from outside).
+  wetLens(count) {
+    const box = this.drips;
+    if (!box) return;
+    const n = this.mode === 'seat' ? count : Math.ceil(count / 3);
+    const vmin = Math.min(window.innerWidth, window.innerHeight) / 100;
+    for (let k = 0; k < n; k++) {
+      const d = document.createElement('span');
+      const size = (2 + Math.random() * 5) * vmin;
+      d.style.width = `${size}px`;
+      d.style.height = `${size * 1.15}px`;
+      d.style.left = `${Math.random() * 100}%`;
+      d.style.top = `${Math.random() * 70}%`;
+      const dur = 1.4 + Math.random() * 1.8;
+      d.style.animationDuration = `${dur}s`;
+      d.style.animationDelay = `${Math.random() * 0.25}s`;
+      box.append(d);
+      setTimeout(() => d.remove(), (dur + 0.4) * 1000);
+    }
+  }
+
+  placeTrain() {
+    const tr = this.track;
+    if (this.slide) {
+      if (this.mode !== 'seat') this.placeRaft();
+      else this.spray.update(0, false);
+      return;
+    }
+    if (this.mode === 'seat') return;
     const m = new THREE.Matrix4();
     this.cars.forEach((car, k) => {
       const s = Math.max(0, this.s - k * CAR_GAP);
@@ -327,21 +498,43 @@ export class Ride {
     });
   }
 
+  placeRaft() {
+    const tr = this.track;
+    const up = this.vec(tr.up, this.s).normalize();
+    const tan = this.vec(tr.tan, this.s).normalize();
+    const side = new THREE.Vector3().crossVectors(up, tan).normalize();
+    const m = new THREE.Matrix4().makeBasis(side, up, tan);
+    this.raft.quaternion.setFromRotationMatrix(m);
+    this.raft.rotateY(this.raftYaw);
+    const p = this.vec(tr.pos, this.s);
+    // Bobbing gently on the water.
+    p.addScaledVector(up, 0.04 * Math.sin(this.time * 5));
+    this.raft.position.copy(p);
+    const moving = this.v > 3 && !this.finished && !(this.s > tr.pool.start * tr.step + 6);
+    this.spray.update(this.dt || 0, moving, p.clone().addScaledVector(tan, -0.9), tan.clone().negate(), up, side, this.v);
+  }
+
   placeSeatCamera(s, upBlend) {
     const tr = this.track;
+    const eye = this.eye;
     const p = this.vec(tr.pos, s);
     const up = this.vec(tr.up, s).normalize();
     // Look further ahead when fast, so little wiggles in the track don't jerk the view.
-    const ahead = Math.min(tr.length, s + Math.min(30, LOOK_AHEAD + this.v * 0.25));
-    const q = this.vec(tr.pos, ahead).addScaledVector(this.vec(tr.up, ahead).normalize(), EYE);
+    // Going round a bowl, look just along the wall instead of across it.
+    const reach = this.slide && this.inBowl ? 4 : Math.min(30, LOOK_AHEAD + this.v * 0.25);
+    const ahead = Math.min(tr.length, s + reach);
+    const q = this.vec(tr.pos, ahead).addScaledVector(this.vec(tr.up, ahead).normalize(), eye);
     if (ahead - s < 1) q.add(this.vec(tr.tan, tr.length).multiplyScalar(LOOK_AHEAD));
     this.camUp.lerp(up, upBlend).normalize();
-    this.camera.position.copy(p).addScaledVector(up, EYE);
+    this.camera.position.copy(p).addScaledVector(up, eye);
     this.camera.up.copy(this.camUp);
     this.camera.lookAt(q);
+    // On the ring float the view sways a little as it turns.
+    if (this.slide) this.camera.rotateY(0.3 * Math.sin(this.raftYaw));
   }
 
-  // Following the train from behind and to the side, always right-side up.
+  // Following the train from behind and to the side, always right-side up. Going round a toilet
+  // bowl it swings up high over the rim to watch him spiral down into it.
   placeChaseCamera(dt, snap) {
     const tr = this.track;
     const p = this.vec(tr.pos, this.s);
@@ -357,9 +550,18 @@ export class Ride {
     const back = 9 + 7 * Math.min(1, Math.max(0, (this.v - 8) / 25));
     const want = p.clone().addScaledVector(this.chaseDir, -back).addScaledVector(sideways, -5);
     want.y = Math.max(p.y + 4, 2.5);
+    const bowl = this.slide && this.bowlCam > 0.001 ? this.inBowl || this.lastBowl : null;
+    if (this.inBowl) this.lastBowl = this.inBowl;
+    if (bowl) {
+      const c = new THREE.Vector3(bowl.center.x, bowl.rim, bowl.center.z);
+      const entry = this.vec(tr.pos, bowl.spiralStart * tr.step).setY(bowl.rim).sub(c).normalize();
+      const crane = c.clone().addScaledVector(entry, bowl.R * 1.35).add(new THREE.Vector3(0, bowl.R * 0.9 + 3, 0));
+      want.lerp(crane, this.bowlCam);
+    }
     if (this.chaseLast && !snap) {
-      // Move along with the train first, so even at space speeds the camera keeps up.
-      const moved = p.clone().sub(this.chaseLast);
+      // Move along with the train first, so even at space speeds the camera keeps up. Not when
+      // craning over a bowl: there the camera holds still and watches him go round.
+      const moved = p.clone().sub(this.chaseLast).multiplyScalar(1 - this.bowlCam);
       this.chasePos.add(moved);
       this.chaseLook.add(moved);
     }
@@ -375,6 +577,10 @@ export class Ride {
       }
       this.chasePos.lerp(want, 1 - Math.exp(-dt * 2.5));
       this.chaseLook.lerp(p, 1 - Math.exp(-dt * 6));
+    }
+    // Never dip into a bowl's funnel on the way in or out of the crane shot.
+    for (const b of this.slide ? tr.bowls : []) {
+      if (Math.hypot(this.chasePos.x - b.center.x, this.chasePos.z - b.center.z) < b.R + 2.5) this.chasePos.y = Math.max(this.chasePos.y, b.rim + 2);
     }
     this.camera.position.copy(this.chasePos);
     this.camera.up.set(0, 1, 0);

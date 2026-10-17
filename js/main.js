@@ -13,18 +13,36 @@ for (const type of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu'])
 document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 document.addEventListener('pointerdown', sound.unlock, { capture: true });
 
-const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(), onChange: changed });
+// Two games: the roller coaster and the water slide. Each keeps its own drawing.
+let mode = 'coaster';
+const ICON = { coaster: '⭐', slide: '🦆' };
+const CONFETTI = {
+  coaster: ['⭐', '🎉', '🌟', '🎈', '✨', '❤️'],
+  slide: ['💦', '🦆', '🌊', '🐠', '☀️', '🏖️'],
+};
+
+const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(mode), onChange: changed });
 const ride = new Ride($('view'), { onFinish: celebrate, onStar: showStars });
 let track = null;
 
 function changed() {
-  saveStrokes(pad.strokes);
+  saveStrokes(mode, pad.strokes);
   track = null;
   const go = $('go');
   go.classList.toggle('disabled', !pad.canGo);
   go.classList.toggle('ready', pad.canGo);
 }
 changed();
+show('pick');
+
+function pick(m) {
+  mode = m;
+  document.body.dataset.mode = m;
+  $('hud-icon').textContent = ICON[m];
+  pad.setMode(m, loadStrokes(m));
+  changed();
+  show('draw');
+}
 
 function show(id) {
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('active', s.id === id);
@@ -39,8 +57,8 @@ function startRide() {
   $('hud-count').textContent = '0';
   show('ride');
   ride.resize();
-  track ??= buildTrack(pad.strokes);
-  ride.start(track);
+  track ??= buildTrack(pad.strokes, { kind: mode });
+  ride.start(track, mode);
 }
 
 function backToDrawing() {
@@ -61,7 +79,8 @@ function showStars(n) {
 function showTally(n) {
   const tally = $('tally');
   if (n === 0) return;
-  const items = n <= 10 ? Array(n).fill('⭐') : ['⭐', String(n)];
+  const icon = ICON[mode];
+  const items = n <= 10 ? Array(n).fill(icon) : [icon, String(n)];
   items.forEach((text, i) => {
     const span = document.createElement('span');
     span.textContent = text;
@@ -72,7 +91,7 @@ function showTally(n) {
 
 function celebrate(stars) {
   showTally(stars);
-  const bits = ['⭐', '🎉', '🌟', '🎈', '✨', '❤️'];
+  const bits = CONFETTI[mode];
   const box = $('confetti');
   for (let i = 0; i < 40; i++) {
     const s = document.createElement('span');
@@ -114,6 +133,19 @@ tap('look', () => {
 });
 // Tap anywhere on the ride for hands up.
 $('view').addEventListener('pointerdown', () => ride.handsUp());
+
+tap('pick-coaster', () => {
+  sound.pop();
+  pick('coaster');
+});
+tap('pick-slide', () => {
+  sound.pop();
+  pick('slide');
+});
+tap('picker', () => {
+  sound.pop();
+  show('pick');
+});
 
 tap('undo', () => (pad.undo() ? sound.pop() : null));
 tap('clear', () => (pad.clear() ? sound.trash() : null));

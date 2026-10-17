@@ -1,5 +1,8 @@
-// The drawing screen: a side view of a sunny park where a finger drag lays down track.
-import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, cssColor } from './track.js';
+// The drawing screen: a side view of a sunny park (or a beach, for the water slide) where a
+// finger drag lays down track.
+import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, cssColor, stationFor } from './track.js';
+import { findBowls } from './slide.js';
+import * as beach from './draw-slide.js';
 import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
@@ -39,7 +42,7 @@ const STARS = (() => {
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   return Array.from({ length: 600 }, () => ({ x: -20 + rand() * 150, y: 10 + Math.pow(rand(), 0.7) * 30, r: 0.6 + rand() * 1.5 }));
 })();
-const STARS_FROM = 10; // units: stars start to show above here
+export const STARS_FROM = 10; // units: stars start to show above here
 const PLANETS = [
   { x: 8, y: 18, r: 1.1, color: '#e9e9ee', craters: true },
   { x: 20, y: 27, r: 1.9, color: '#e8c27a', ring: '#d9b77a' },
@@ -64,6 +67,9 @@ export class DrawPad {
     this.edgeHold = 0; // seconds the finger has been held against the top
     this.dirty = true;
     this.active = true;
+    this.mode = 'coaster';
+    this.sessions = {}; // per game: its strokes, undo history and view
+    this.bowls = null; // water slide: tight circles found in the drawing (cached; see bowlList)
 
     this.resize();
     this.fitView();
@@ -89,7 +95,42 @@ export class DrawPad {
   }
 
   get canGo() {
-    return drawnLength(this.strokes) >= MIN_DRAWN_LENGTH;
+    return drawnLength(this.strokes, this.mode) >= MIN_DRAWN_LENGTH;
+  }
+
+  get station() {
+    return stationFor(this.mode);
+  }
+
+  path() {
+    return pathFromStrokes(this.strokes, this.mode);
+  }
+
+  // Switch between the coaster and the water slide. Each keeps its own drawing, undo and view.
+  setMode(mode, strokes) {
+    this.sessions[this.mode] = { strokes: this.strokes, history: this.history, zoom: this.zoom, panX: this.panX };
+    this.mode = mode;
+    const saved = this.sessions[mode];
+    this.strokes = saved ? saved.strokes : strokes;
+    this.history = saved ? saved.history : [];
+    this.bowls = null;
+    if (saved) this.setView(saved.zoom, saved.panX);
+    else this.fitView();
+    this.dirty = true;
+  }
+
+  // Tight circles on the water slide become toilet bowls. Found once a line is finished; while
+  // a line is being drawn only points are added at the end, so the old ones stay valid.
+  bowlList(path) {
+    if (this.mode !== 'slide') return [];
+    if (!this.bowls) this.bowls = findBowls(path);
+    return this.bowls;
+  }
+
+  strokesChanged() {
+    const before = this.bowls ? this.bowls.length : 0;
+    this.bowls = null;
+    if (this.mode === 'slide' && this.bowlList(this.path()).length > before) sound.swirl();
   }
 
   resize() {
@@ -120,14 +161,14 @@ export class DrawPad {
   setView(zoom, panX) {
     this.zoom = Math.max(MIN_ZOOM, Math.min(1, zoom));
     const visible = (this.w - this.left) / this.unit;
-    const farthest = Math.max(...pathFromStrokes(this.strokes).map((p) => p.x));
+    const farthest = Math.max(...this.path().map((p) => p.x));
     this.panX = Math.max(0, Math.min(panX, farthest - visible * 0.5));
     this.dirty = true;
   }
 
   // Zoom out just enough to show the whole drawing (used when a saved drawing loads).
   fitView() {
-    const pts = pathFromStrokes(this.strokes);
+    const pts = this.path();
     const maxX = Math.max(...pts.map((p) => p.x)) + 0.15;
     const maxY = Math.max(...pts.map((p) => p.y)) + 0.1;
     const fit = Math.min((this.w - this.left - 20) / (maxX * this.groundY), (this.groundY - 20) / (maxY * this.groundY));
@@ -166,7 +207,7 @@ export class DrawPad {
     const p = this.toTrack(e.clientX, e.clientY);
     this.strokes.push({ c: this.color, p: [p] });
     this.lastScreen = { x: e.clientX, y: e.clientY };
-    sound.drawStart(p.y);
+    sound.drawStart(p.y, this.mode === 'slide');
     this.dirty = true;
   }
 
@@ -197,6 +238,7 @@ export class DrawPad {
     this.pointerId = null;
     sound.drawStop();
     this.dirty = true;
+    this.strokesChanged();
     this.onChange();
   }
 
@@ -262,6 +304,7 @@ export class DrawPad {
         this.strokes.pop();
         this.history.pop();
       }
+      this.bowls = null;
       this.onChange();
     }
     const [a, b] = [...this.pointers.values()];
@@ -291,6 +334,7 @@ export class DrawPad {
     if (!this.history.length) return false;
     this.strokes = this.history.pop();
     this.dirty = true;
+    this.bowls = null;
     this.onChange();
     return true;
   }
@@ -299,6 +343,7 @@ export class DrawPad {
     if (!this.strokes.length) return false;
     this.pushHistory(); // so undo can bring it back
     this.strokes = [];
+    this.bowls = null;
     this.setView(1, 0);
     this.onChange();
     return true;
@@ -320,6 +365,51 @@ export class DrawPad {
 
     // Sun and clouds are scenery: sized to the screen, not the zoom.
     const z = Math.max(0.45, Math.min(1, Math.min(w, h) / 834));
+    const slide = this.mode === 'slide';
+    if (slide) beach.paintSky(this, z, space);
+    else this.paintSunAndClouds(z, space);
+
+    // Ground. Zoomed way out, it curves away like the Earth seen from up high.
+    const pts = this.path();
+    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
+    const groundAt = (sx) => {
+      const wx = (sx - this.left) / this.unit + this.panX;
+      return groundY + ((wx - cx) ** 2 / (2 * EARTH_R)) * this.unit;
+    };
+    const edge = () => {
+      ctx.beginPath();
+      for (let sx = 0; sx <= w + 8; sx += 8) ctx.lineTo(sx, groundAt(sx));
+    };
+    if (space > 0) {
+      edge(); // a soft glow of atmosphere hugging the curve
+      ctx.strokeStyle = `rgba(140,200,255,${0.35 * space})`;
+      ctx.lineWidth = 18;
+      ctx.stroke();
+    }
+    if (slide) beach.paintSea(this, groundAt, z);
+    edge();
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fillStyle = slide ? '#f2d49b' : '#5cc94f';
+    ctx.fill();
+    edge();
+    ctx.strokeStyle = slide ? '#e3bd78' : '#4bb33f';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    if (slide) {
+      beach.paintSand(this, groundAt, z);
+      beach.paintSlide(this, pts, this.bowlList(pts));
+      beach.paintTower(this);
+    } else {
+      this.drawTrack();
+      this.drawStation();
+    }
+  }
+
+  paintSunAndClouds(z, space) {
+    const { ctx, w, h } = this;
     const sx = w * 0.5;
     const sy = h * 0.15;
     ctx.fillStyle = '#ffe14d';
@@ -342,37 +432,6 @@ export class DrawPad {
     for (const [cx, cy, s] of [[0.18, 0.22, 1], [0.78, 0.3, 1.3], [0.35, 0.45, 0.8]]) {
       cloud(ctx, cx * w, cy * h, s * z);
     }
-
-    // Ground. Zoomed way out, it curves away like the Earth seen from up high.
-    const pts = pathFromStrokes(this.strokes);
-    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
-    const groundAt = (sx) => {
-      const wx = (sx - this.left) / this.unit + this.panX;
-      return groundY + ((wx - cx) ** 2 / (2 * EARTH_R)) * this.unit;
-    };
-    const edge = () => {
-      ctx.beginPath();
-      for (let sx = 0; sx <= w + 8; sx += 8) ctx.lineTo(sx, groundAt(sx));
-    };
-    if (space > 0) {
-      edge(); // a soft glow of atmosphere hugging the curve
-      ctx.strokeStyle = `rgba(140,200,255,${0.35 * space})`;
-      ctx.lineWidth = 18;
-      ctx.stroke();
-    }
-    edge();
-    ctx.lineTo(w, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
-    ctx.fillStyle = '#5cc94f';
-    ctx.fill();
-    edge();
-    ctx.strokeStyle = '#4bb33f';
-    ctx.lineWidth = 8;
-    ctx.stroke();
-
-    this.drawTrack();
-    this.drawStation();
   }
 
   drawSpace() {
@@ -417,7 +476,7 @@ export class DrawPad {
 
   drawTrack() {
     const { ctx, groundY, k } = this;
-    const pts = pathFromStrokes(this.strokes).map((p) => ({ ...this.toScreen(p), c: p.c, high: p.y > SUPPORT_TOP }));
+    const pts = this.path().map((p) => ({ ...this.toScreen(p), c: p.c, high: p.y > SUPPORT_TOP }));
 
     // Support poles
     ctx.strokeStyle = '#b9c3d6';
@@ -530,16 +589,18 @@ export class DrawPad {
     if (!show) return;
     const cycle = (t / 3200) % 1;
     const k = Math.min(1, cycle / 0.8);
+    const st = this.station;
+    // Coaster: up and over a hill. Slide: swooping down off the tower.
     const p = this.toScreen({
-      x: STATION.x1 + 0.05 + k * 0.7,
-      y: STATION.y + 0.03 + 0.35 * Math.sin(Math.PI * k),
+      x: st.x1 + 0.05 + k * 0.7,
+      y: this.mode === 'slide' ? st.y + 0.03 - 0.2 * (1 - Math.cos(Math.PI * k)) : st.y + 0.03 + 0.35 * Math.sin(Math.PI * k),
     });
     const size = this.hand.offsetHeight || 64;
     this.hand.style.transform = `translate(${p.x - size * 0.47}px, ${p.y - size * 0.1}px)`;
   }
 }
 
-function cloud(ctx, x, y, s) {
+export function cloud(ctx, x, y, s) {
   ctx.beginPath();
   ctx.arc(x, y, 26 * s, 0, Math.PI * 2);
   ctx.arc(x + 30 * s, y - 12 * s, 32 * s, 0, Math.PI * 2);
@@ -547,7 +608,7 @@ function cloud(ctx, x, y, s) {
   ctx.fill();
 }
 
-function roundRect(ctx, x, y, w, h, r) {
+export function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);

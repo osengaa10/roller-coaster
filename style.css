@@ -211,6 +211,154 @@ canvas {
   }
 }
 
+/* --- Picker: coaster or water slide ------------------------------------------ */
+#pick {
+  background: #c9ecff;
+}
+#pick-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* Little bits of life in the pictures: drifting clouds, flapping gulls, bobbing boats, flowing water. */
+#pick svg .drift {
+  animation: drift 9s ease-in-out infinite alternate;
+}
+#pick svg .spin-slow,
+#pick svg .swirl {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spin 14s linear infinite;
+}
+#pick svg .swirl {
+  animation-duration: 2.4s;
+}
+#pick svg .flap {
+  animation: flap 0.9s ease-in-out infinite alternate;
+}
+#pick svg .bob {
+  animation: float 2.6s ease-in-out infinite alternate;
+}
+#pick svg .twinkle {
+  animation: twinkle 1.4s ease-in-out infinite alternate;
+}
+#pick svg .wave {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: flag 0.8s ease-in-out infinite alternate;
+}
+#pick svg .flow {
+  animation: flow 0.6s linear infinite;
+}
+#pick svg .splash {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: splash 1.2s ease-out infinite;
+}
+#pick svg .puff {
+  animation: twinkle 2s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  to {
+    transform: translateX(12px);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes flap {
+  to {
+    transform: translateY(-2px) scaleY(0.8);
+  }
+}
+@keyframes float {
+  to {
+    transform: translateY(1.5px);
+  }
+}
+@keyframes twinkle {
+  from {
+    opacity: 0.45;
+  }
+}
+@keyframes flag {
+  to {
+    transform: scaleX(0.75) skewY(8deg);
+  }
+}
+@keyframes flow {
+  to {
+    stroke-dashoffset: -6;
+  }
+}
+@keyframes splash {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.2) translateY(-2px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #pick svg * {
+    animation: none !important;
+  }
+}
+.picks {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(20px, 6vmin, 60px);
+  padding: max(var(--edge), env(safe-area-inset-top)) max(var(--edge), env(safe-area-inset-right)) max(var(--edge), env(safe-area-inset-bottom))
+    max(var(--edge), env(safe-area-inset-left));
+}
+.pick {
+  width: min(42vw, 62vh);
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  border: calc(var(--ring) * 1.6) solid #fff;
+  border-radius: clamp(18px, 4vmin, 36px);
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 calc(var(--ring) * 2) 0 rgba(0, 0, 0, 0.2), 0 14px 28px rgba(0, 0, 0, 0.25);
+  touch-action: manipulation;
+  cursor: pointer;
+  animation: bob 2.8s ease-in-out infinite;
+  transition: transform 0.1s;
+}
+#pick-slide {
+  animation-delay: -1.4s;
+}
+.pick svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pick:active {
+  animation: none;
+  transform: translateY(6px) scale(0.95);
+}
+@keyframes bob {
+  50% {
+    transform: translateY(-8px) rotate(-1.5deg);
+  }
+}
+#picker {
+  position: absolute;
+  left: max(var(--edge), env(safe-area-inset-left));
+  bottom: max(var(--edge), env(safe-area-inset-bottom));
+}
+
 /* --- Crayons ------------------------------------------------------------------- */
 #crayons {
   position: absolute;
@@ -329,6 +477,46 @@ canvas {
   #rotate {
     display: grid;
   }
+}
+
+/* Water drops running down the "lens" after a splash. */
+#drips {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+#drips span {
+  position: absolute;
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.85), rgba(190, 230, 255, 0.35) 45%, rgba(120, 190, 240, 0.15) 70%);
+  box-shadow: inset 0 -2px 4px rgba(255, 255, 255, 0.5), 0 1px 2px rgba(0, 40, 80, 0.15);
+  animation: drip linear forwards;
+}
+@keyframes drip {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  8% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  35% {
+    transform: translateY(4vh) scale(1);
+  }
+  100% {
+    transform: translateY(45vh) scale(0.8, 1.2);
+    opacity: 0;
+  }
+}
+
+/* Water slide: sandy and sea-blue instead of sky-blue. */
+body[data-mode='slide'] {
+  background: #3fc1ff;
+}
+body[data-mode='slide'] #hud {
+  border-color: #ffb703;
 }
 
 /* Darkened edges at top speed. */

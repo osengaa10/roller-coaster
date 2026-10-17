@@ -13,7 +13,7 @@ function hash(x, y) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
 }
 
-function noise(x, y) {
+export function noise(x, y) {
   const xi = Math.floor(x);
   const yi = Math.floor(y);
   const xf = x - xi;
@@ -28,7 +28,7 @@ function noise(x, y) {
 }
 
 // Layered noise in roughly 0..1.
-function fbm(x, y) {
+export function fbm(x, y) {
   let sum = 0;
   let amp = 0.5;
   for (let o = 0; o < 4; o++) {
@@ -40,7 +40,7 @@ function fbm(x, y) {
   return sum / 0.9375;
 }
 
-const smoothstep = (a, b, x) => {
+export const smoothstep = (a, b, x) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
@@ -368,7 +368,7 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
   return g;
 }
 
-function merge(geos) {
+export function merge(geos) {
   const parts = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   const count = parts.reduce((n, g) => n + g.attributes.position.count, 0);
   const pos = new Float32Array(count * 3);
@@ -400,9 +400,10 @@ function leafyFoliage() {
 
 // The rest of the planet: a big curved cap of land, sea and clouds under the park, only really
 // visible from way up high (near the ground the grass covers it).
-let earthTexture = null;
-function getEarthTexture() {
-  if (earthTexture) return earthTexture;
+// kind 'beach': mostly ocean, with the park on a tropical island in the middle.
+const earthTextures = {};
+function getEarthTexture(kind) {
+  if (earthTextures[kind]) return earthTextures[kind];
   const size = 512;
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -414,10 +415,14 @@ function getEarthTexture() {
       const u = x / size - 0.5;
       const v = y / size - 0.5;
       // Land around the park in the middle, ocean further out.
-      const land = fbm(x / 70 + 3, y / 70 + 5) + 0.38 - Math.hypot(u, v) * 1.1;
+      const r = Math.hypot(u, v);
+      const land =
+        kind === 'beach'
+          ? fbm(x / 50 + 3, y / 50 + 5) - 0.05 - r * 1.3 + 0.5 * Math.max(0, 1 - r * 14)
+          : fbm(x / 70 + 3, y / 70 + 5) + 0.38 - r * 1.1;
       const relief = fbm(x / 25 + 11, y / 25 + 2);
       let col;
-      if (land < 0.42) col = mix([20, 70, 150], [45, 120, 190], smoothstep(0.2, 0.42, land));
+      if (land < 0.42) col = kind === 'beach' ? mix([18, 80, 165], [60, 200, 215], smoothstep(0.3, 0.42, land)) : mix([20, 70, 150], [45, 120, 190], smoothstep(0.2, 0.42, land));
       else if (land < 0.45) col = [216, 200, 144];
       else if (relief > 0.68) col = relief > 0.76 ? [240, 242, 245] : [130, 128, 112];
       else col = mix([90, 168, 60], [52, 112, 44], smoothstep(0.35, 0.65, relief));
@@ -427,12 +432,13 @@ function getEarthTexture() {
     }
   }
   g.putImageData(img, 0, 0);
-  earthTexture = new THREE.CanvasTexture(c);
-  earthTexture.colorSpace = THREE.SRGBColorSpace;
-  return earthTexture;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  earthTextures[kind] = tex;
+  return tex;
 }
 
-function makeEarth(center) {
+export function makeEarth(center, kind = 'park') {
   const cap = 0.5; // radians of the sphere around the top
   const geo = new THREE.SphereGeometry(EARTH_R, 128, 48, 0, Math.PI * 2, 0, cap);
   // Map the texture straight down onto the cap (no squashed poles).
@@ -440,7 +446,7 @@ function makeEarth(center) {
   const uv = geo.attributes.uv;
   const span = 2 * EARTH_R * Math.sin(cap);
   for (let k = 0; k < pos.count; k++) uv.setXY(k, pos.getX(k) / span + 0.5, pos.getZ(k) / span + 0.5);
-  const earth = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: getEarthTexture() }));
+  const earth = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: getEarthTexture(kind) }));
   earth.position.set(center.x, -EARTH_R - 3, center.z); // just under the grass
   return earth;
 }
