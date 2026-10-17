@@ -12,7 +12,7 @@ const SUPPORT_TOP = 7.5; // normalized (300 m): no supports drawn above this, sa
 const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows when zoomed way out
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
-const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the right side
+const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the left or right side
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
 // The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
@@ -209,21 +209,24 @@ export class DrawPad {
   }
 
   // Holding a line against an edge keeps the track going that way:
-  // the top zooms out (up toward space), the right side scrolls along at the same size.
+  // the top zooms out (up toward space), the sides scroll along at the same size
+  // (the left side only until the station is back in view).
   // The finger stays put while the world moves under it, so the track grows that way.
   edgeMove(dt) {
     if (this.pointerId === null || !this.lastScreen) return;
     const { x, y } = this.lastScreen;
     const top = this.atTop();
     const right = x >= this.w - this.edgeBand;
+    const left = x <= this.left + this.edgeBand && this.panX > 0;
     if (!top) this.edgeHold = 0;
-    if (!top && !right) return;
+    if (!top && !right && !left) return;
     let zoom = this.zoom;
     if (top && zoom > MIN_ZOOM) {
       this.edgeHold += dt;
       zoom *= Math.exp(-EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45) * dt);
     }
-    const scroll = right ? (EDGE_SCROLL * (this.w - this.left) * dt) / (this.groundY * zoom) : 0;
+    const side = right ? 1 : left ? -1 : 0;
+    const scroll = (side * EDGE_SCROLL * (this.w - this.left) * dt) / (this.groundY * zoom);
     this.setView(zoom, this.panX + scroll);
     const stroke = this.strokes[this.strokes.length - 1].p;
     const p = this.toTrack(x, y);
