@@ -272,3 +272,14 @@ test('lines drawn at normal zoom keep their shape (a loop is still a loop)', () 
   const tr = buildTrack([loop.map((p) => ({ ...p, w: 0.04 }))]);
   assert.ok(Math.min(...Array.from({ length: tr.count }, (_, i) => upY(tr, i))) < -0.8);
 });
+
+test('a max-height hill climbs quickly, normal hills keep a gentle chain', () => {
+  const climb = (tr) => {
+    let t = 0;
+    for (let i = 1; i < tr.count; i++) if (tr.tan[i * 3 + 1] > 0.1 && tr.pos[i * 3 + 1] > 5) t += tr.step / tr.speed[i];
+    return t;
+  };
+  assert.ok(climb(buildTrack([space])) < 22, 'giant climb under ~20 s');
+  const small = buildTrack([hill]);
+  assert.ok(Math.max(...Array.from(small.speed).filter((_, i) => small.lift[i])) < 9, 'normal chain stays gentle');
+});

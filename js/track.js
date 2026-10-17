@@ -14,7 +14,14 @@ export const V_MIN = 5.5; // chain-lift speed: the train never stalls or rolls b
 export const V_MAX = 45; // about 100 mph, like the fastest real coasters
 // The lift chain speeds up gently on tall hills so a giant one doesn't take forever, and very
 // tall drops may go a bit faster. Kept modest so the ride stays smooth.
-export const liftSpeed = (height) => Math.min(80, V_MIN + Math.max(0, height) * 0.12);
+// Normal-size hills keep a gentle chain; past ~30 m it picks up much faster, so even a
+// max-height hill climbs in well under half a minute.
+const FAST_LIFT_FROM = 30; // meters
+export const liftSpeed = (height) => {
+  const h = Math.max(0, height);
+  const gentle = V_MIN + Math.min(h, FAST_LIFT_FROM) * 0.12;
+  return Math.min(100, gentle + Math.max(0, h - FAST_LIFT_FROM) * 0.7);
+};
 const maxSpeed = (height) => Math.min(100, Math.max(V_MAX, liftSpeed(height) * 1.25));
 const G = 9.81;
 const FRICTION = 0.015;
