@@ -65,7 +65,7 @@ export function pathFromStrokes(strokes) {
   ];
   for (const stroke of strokes) {
     const { c, p } = normalizeStroke(stroke);
-    for (const pt of p) path.push({ x: pt.x, y: pt.y, c });
+    for (const pt of p) path.push({ x: pt.x, y: pt.y, c, w: pt.w || 0 });
   }
   return path;
 }
@@ -102,6 +102,7 @@ export function resample(pts, spacing, keys = ['x', 'y']) {
       const p = {};
       for (const k of keys) p[k] = a[k] + (b[k] - a[k]) * f;
       if ('c' in b) p.c = b.c;
+      if ('w' in b) p.w = b.w;
       out.push(p);
       t += spacing;
     }
@@ -110,6 +111,28 @@ export function resample(pts, spacing, keys = ['x', 'y']) {
   const last = clean[clean.length - 1];
   if (dist(out[out.length - 1], last, keys) > spacing * 0.25) out.push({ ...last });
   return out;
+}
+
+// Lines drawn while zoomed way out carry finger wobble that's huge in real meters. Each point
+// remembers how zoomed out he was (w: about 20 screen pixels, in track units) and gets averaged
+// over that much track, so a line comes out as smooth as it looked on screen. Lines drawn at
+// normal zoom have a small w and are left alone (the regular smoothing handles them).
+export function smoothByScale(pts, spacing) {
+  const n = pts.length;
+  const sx = new Float64Array(n + 1);
+  const sy = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    sx[i + 1] = sx[i] + pts[i].x;
+    sy[i + 1] = sy[i] + pts[i].y;
+  }
+  return pts.map((p, i) => {
+    const k = Math.round((p.w || 0) / spacing);
+    if (k <= 4 || i === 0 || i === n - 1) return p;
+    const a = Math.max(0, i - k);
+    const b = Math.min(n - 1, i + k);
+    const count = b - a + 1;
+    return { ...p, x: (sx[b + 1] - sx[a]) / count, y: (sy[b + 1] - sy[a]) / count };
+  });
 }
 
 // Repeated [1 2 1] blur with both ends pinned. Irons out finger wobble and sharp corners.
@@ -133,7 +156,7 @@ function dist(a, b, keys) {
 
 export function buildTrack(strokes) {
   // 1. 2D path: station + drawing + flat brake run in whatever direction he was heading.
-  const drawn = resample(pathFromStrokes(strokes), 0.012);
+  const drawn = smoothByScale(smoothByScale(resample(pathFromStrokes(strokes), 0.012), 0.012), 0.012);
   let dirX = 1;
   for (let i = drawn.length - 1; i > 0 && drawn.length - i < 12; i--) {
     const dx = drawn[drawn.length - 1].x - drawn[i - 1].x;

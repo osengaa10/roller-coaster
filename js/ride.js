@@ -17,8 +17,8 @@ const HORIZON = new THREE.Color('#cfe8fb');
 const DUSK_TOP = new THREE.Color('#3a3f8f');
 const DUSK_HORIZON = new THREE.Color('#f4a37c');
 const SPACE = new THREE.Color('#060820');
-const SPACE_FROM = 300; // meters: the sky starts getting darker
-const SPACE_TO = 3200; // meters: full outer space (the change is spread out on a log scale)
+const SPACE_FROM = 150; // meters: the sky starts getting darker
+const SPACE_TO = 1300; // meters: full outer space (the change is spread out on a log scale)
 
 export class Ride {
   constructor(canvas, { onFinish = () => {}, onStar = () => {} } = {}) {
@@ -331,7 +331,8 @@ export class Ride {
     const tr = this.track;
     const p = this.vec(tr.pos, s);
     const up = this.vec(tr.up, s).normalize();
-    const ahead = Math.min(tr.length, s + LOOK_AHEAD);
+    // Look further ahead when fast, so little wiggles in the track don't jerk the view.
+    const ahead = Math.min(tr.length, s + Math.min(30, LOOK_AHEAD + this.v * 0.25));
     const q = this.vec(tr.pos, ahead).addScaledVector(this.vec(tr.up, ahead).normalize(), EYE);
     if (ahead - s < 1) q.add(this.vec(tr.tan, tr.length).multiplyScalar(LOOK_AHEAD));
     this.camUp.lerp(up, upBlend).normalize();

@@ -4,10 +4,12 @@ import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
 const MAX_HISTORY = 60;
-const MIN_ZOOM = 0.01; // how far the view can zoom out (1 = the sky is one track-height tall)
-const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; 100 = 4 km, up in space)
+const MIN_ZOOM = 0.027; // how far the view can zoom out (1 = the sky is one track-height tall)
+const TOP_Y = 1 / MIN_ZOOM; // highest point he can draw (normalized; ~37 = 1.5 km, up in space)
+const SETTLE = 1.0; // per second: zooming back in as the line comes down from a big hill
+const WOBBLE_PX = 20; // finger wobble smoothed away on screen; stored per point as track units
 const SUPPORT_TOP = 7.5; // normalized (300 m): no supports drawn above this, same as the ride
-const EARTH_R = 500; // normalized; a pretend-small Earth so its curve shows when zoomed way out
+const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows when zoomed way out
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the edge
 
@@ -16,10 +18,10 @@ const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds ag
 const SKY_STOPS = [
   [0, [201, 236, 255]],
   [1, [79, 179, 255]],
-  [6, [48, 120, 230]],
-  [25, [30, 62, 165]],
-  [55, [14, 20, 62]],
-  [80, [5, 6, 26]],
+  [4, [48, 120, 230]],
+  [12, [30, 62, 165]],
+  [24, [14, 20, 62]],
+  [32, [5, 6, 26]],
 ];
 function skyAt(alt) {
   let i = 0;
@@ -34,13 +36,13 @@ function skyAt(alt) {
 const STARS = (() => {
   let seed = 9;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  return Array.from({ length: 700 }, () => ({ x: -40 + rand() * 340, y: 20 + Math.pow(rand(), 0.7) * 82, r: 0.6 + rand() * 1.5 }));
+  return Array.from({ length: 600 }, () => ({ x: -20 + rand() * 150, y: 10 + Math.pow(rand(), 0.7) * 30, r: 0.6 + rand() * 1.5 }));
 })();
-const STARS_FROM = 20; // units: stars start to show above here
+const STARS_FROM = 10; // units: stars start to show above here
 const PLANETS = [
-  { x: 20, y: 42, r: 2.5, color: '#e9e9ee', craters: true },
-  { x: 55, y: 66, r: 4.5, color: '#e8c27a', ring: '#d9b77a' },
-  { x: 92, y: 86, r: 2, color: '#d9623b' },
+  { x: 8, y: 18, r: 1.1, color: '#e9e9ee', craters: true },
+  { x: 20, y: 27, r: 1.9, color: '#e8c27a', ring: '#d9b77a' },
+  { x: 32, y: 34, r: 0.9, color: '#d9623b' },
 ];
 
 export class DrawPad {
@@ -76,6 +78,7 @@ export class DrawPad {
       last = t;
       if (this.active) {
         this.edgeZoom(dt);
+        this.settleZoom(dt);
         if (this.dirty) this.render();
         this.animateHand(t);
       }
@@ -142,6 +145,7 @@ export class DrawPad {
     return {
       x: +((x - this.left) / this.unit + this.panX).toFixed(4),
       y: +Math.min(top, Math.max(MIN_Y, (this.groundY - y) / this.unit)).toFixed(4),
+      w: +(WOBBLE_PX / this.unit).toFixed(3), // how zoomed out he was, for smoothing (see track.js)
     };
   }
 
@@ -197,11 +201,16 @@ export class DrawPad {
 
   // Holding a line against the right or top edge zooms out. The finger stays put while the world
   // shrinks under it, so the track keeps growing that way and the whole coaster stays in view.
-  edgeZoom(dt) {
-    if (this.pointerId === null || !this.lastScreen || this.zoom <= MIN_ZOOM) return;
+  atEdge() {
     const band = Math.max(28, Math.min(this.w, this.h) * 0.07);
     const { x, y } = this.lastScreen;
-    if (x < this.w - band && y > band) {
+    return x >= this.w - band || y <= band;
+  }
+
+  edgeZoom(dt) {
+    if (this.pointerId === null || !this.lastScreen || this.zoom <= MIN_ZOOM) return;
+    const { x, y } = this.lastScreen;
+    if (!this.atEdge()) {
       this.edgeHold = 0;
       return;
     }
@@ -215,6 +224,20 @@ export class DrawPad {
       stroke.push(p);
       sound.drawMove(p.y);
     }
+  }
+
+  // Coming back down from a giant hill, the view zooms back in around the finger, so whatever
+  // he draws next near the ground (a loop, a little hill) comes out normal size.
+  settleZoom(dt) {
+    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atEdge()) return;
+    const stroke = this.strokes[this.strokes.length - 1].p;
+    const pen = stroke[stroke.length - 1];
+    const target = Math.min(1, 0.5 / Math.max(pen.y, 0.01)); // keep the pen around mid-sky
+    if (target <= this.zoom) return;
+    const zoom = Math.min(target, this.zoom * Math.exp(SETTLE * dt));
+    const fx = this.lastScreen.x - this.left;
+    const anchor = fx / this.unit + this.panX; // track x under the finger stays put
+    this.setView(zoom, anchor - fx / (this.groundY * zoom));
   }
 
   // Two fingers: pinch to zoom out/in, slide to move along the track.
@@ -281,7 +304,7 @@ export class DrawPad {
     sky.addColorStop(1, skyAt(topAlt));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, groundY);
-    const space = Math.max(0, Math.min(1, (topAlt - 6) / 40)); // 0 = all blue, 1 = deep space on screen
+    const space = Math.max(0, Math.min(1, (topAlt - 4) / 20)); // 0 = all blue, 1 = deep space on screen
     if (topAlt > STARS_FROM) this.drawSpace();
 
     // Sun and clouds are scenery: sized to the screen, not the zoom.
@@ -346,7 +369,7 @@ export class DrawPad {
     for (const s of STARS) {
       const p = this.toScreen(s);
       if (p.x < -4 || p.x > this.w + 4 || p.y < -4) continue;
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - STARS_FROM) / 30)})`;
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, (s.y - STARS_FROM) / 12)})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, s.r, 0, Math.PI * 2);
       ctx.fill();

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 
 export const SUN_DIR = new THREE.Vector3(-0.45, 0.42, -0.79).normalize();
-export const EARTH_R = 80000; // meters; a pretend-small Earth so its curve shows at ~4 km up
+export const EARTH_R = 50000; // meters; a pretend-small Earth so its curve shows at ~1.5 km up
 
 // --- Noise -------------------------------------------------------------------------------
 

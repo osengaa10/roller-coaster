@@ -224,15 +224,15 @@ test('steep lift hills get supports too', () => {
 
 // A climb way up into space, as drawn when he holds against the top edge.
 const space = [
-  ...stroke((t) => ({ x: 0.3 + t * 16, y: 0.06 + t * 100 }), 300),
-  ...stroke((t) => ({ x: 16.3 + t * 16, y: 100 - t * 99.9 }), 300),
+  ...stroke((t) => ({ x: 0.3 + t * 6, y: 0.06 + t * 37, w: 1 }), 300),
+  ...stroke((t) => ({ x: 6.3 + t * 6, y: 37 - t * 36.9, w: 1 }), 300),
 ];
 
 test('a giant space coaster stays a sensible size', () => {
   const tr = buildTrack([space]);
   assertFinite(tr);
   assert.ok(tr.count <= 16100, `too many samples: ${tr.count}`);
-  assert.ok(Math.max(...Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1])) > 3500, 'reaches ~4 km');
+  assert.ok(Math.max(...Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1])) > 1300, 'reaches ~1.5 km');
   assert.ok(starSpots(tr).length <= 41);
   assert.ok(supportSpots(tr).every((s) => s.y < 301), 'no supports up in space');
 });
@@ -242,6 +242,33 @@ test('speeds stay smooth: never faster than 100 m/s, and a 10 km hill rides in m
   assert.ok(Math.max(...tr.speed) <= 100);
   let seconds = 0;
   for (let i = 1; i < tr.count; i++) seconds += tr.step / tr.speed[i];
-  assert.ok(seconds < 150, `ride takes ${seconds.toFixed(0)} s`);
+  assert.ok(seconds < 90, `ride takes ${seconds.toFixed(0)} s`);
   assert.ok(Math.max(...tr.speed) > 45, 'giant drops really fly');
+});
+
+// Worst bend partway up a climb (between 60 m and 1100 m high): largest change of direction per meter.
+function sharpest(tr) {
+  let worst = 0;
+  for (let i = 2; i < tr.count; i++) {
+    if (tr.pos[i * 3 + 1] < 60 || tr.pos[i * 3 + 1] > 1100) continue;
+    const d = tr.tan[i * 3] * tr.tan[i * 3 - 3] + tr.tan[i * 3 + 1] * tr.tan[i * 3 - 2] + tr.tan[i * 3 + 2] * tr.tan[i * 3 - 1];
+    worst = Math.max(worst, Math.acos(Math.min(1, d)) / tr.step);
+  }
+  return worst;
+}
+
+test('wobbly lines drawn while zoomed way out come out smooth', () => {
+  // A climb drawn at max zoom-out: every finger sample wobbles ~0.2 units (8 m).
+  let seed = 5;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.4;
+  const wobbly = (w) => stroke((t) => ({ x: 0.3 + t * 8 + rand(), y: 0.06 + t * 30 + rand(), w }), 400);
+  const rough = sharpest(buildTrack([wobbly(0)]));
+  const smooth = sharpest(buildTrack([wobbly(1)]));
+  assert.ok(smooth < rough / 4, `smoothing should help a lot: ${smooth.toFixed(3)} vs ${rough.toFixed(3)} rad/m`);
+  assert.ok(smooth < 0.06, `no sharp bumps: ${smooth.toFixed(3)} rad/m`);
+});
+
+test('lines drawn at normal zoom keep their shape (a loop is still a loop)', () => {
+  const tr = buildTrack([loop.map((p) => ({ ...p, w: 0.04 }))]);
+  assert.ok(Math.min(...Array.from({ length: tr.count }, (_, i) => upY(tr, i))) < -0.8);
 });
