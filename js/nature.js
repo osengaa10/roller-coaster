@@ -57,14 +57,16 @@ export function mulberry32(seed) {
 
 // --- Sky ---------------------------------------------------------------------------------
 
-// A big dome that follows the camera: haze at the horizon, deeper blue overhead, a glowing sun,
-// and a mix toward black space for very tall coasters.
+// A big dome that follows the camera: haze at the horizon, deeper blue overhead, a sun disk with
+// a soft halo, a warm glow along the horizon toward the sun (stronger at sunset), and a mix
+// toward black space for very tall coasters.
 export function makeSky() {
   const uniforms = {
     top: { value: new THREE.Color('#2f7fd8') },
     horizon: { value: new THREE.Color('#cfe8fb') },
     space: { value: new THREE.Color('#060820') },
     spaceMix: { value: 0 },
+    dusk: { value: 0 },
     sunDir: { value: SUN_DIR.clone() },
   };
   const material = new THREE.ShaderMaterial({
@@ -83,21 +85,30 @@ export function makeSky() {
       uniform vec3 horizon;
       uniform vec3 space;
       uniform float spaceMix;
+      uniform float dusk;
       uniform vec3 sunDir;
       varying vec3 vDir;
       void main() {
         vec3 d = normalize(vDir);
         float h = max(d.y, 0.0);
-        vec3 c = mix(horizon, top, pow(h, 0.5));
         float s = max(dot(d, sunDir), 0.0);
-        vec3 glow = vec3(1.0, 0.92, 0.7) * (pow(s, 900.0) * 3.0 + pow(s, 40.0) * 0.35 + pow(s, 6.0) * 0.12);
+        // Deeper blue overhead, pale haze low down; a little darker below the horizon.
+        vec3 c = mix(horizon, top, pow(h, 0.45));
+        c = mix(c, horizon * 0.86, smoothstep(0.0, -0.25, d.y));
+        // Warm light scattered along the horizon on the sun's side of the sky.
+        vec3 warm = mix(vec3(1.0, 0.86, 0.66), vec3(1.0, 0.55, 0.3), dusk);
+        float band = exp(-h * mix(9.0, 5.0, dusk)) * pow(s, mix(3.0, 1.5, dusk));
+        c = mix(c, warm, band * mix(0.22, 0.6, dusk));
+        // The sun: a crisp disk, a bright halo and a wide soft glow.
+        float disk = smoothstep(0.99965, 0.9999, s);
+        vec3 glow = mix(vec3(1.0, 0.95, 0.82), vec3(1.0, 0.7, 0.4), dusk) * (disk * 8.0 + pow(s, 600.0) * 1.5 + pow(s, 40.0) * 0.3 + pow(s, 6.0) * 0.1);
         c = mix(c + glow, space + glow * 0.6, spaceMix);
         gl_FragColor = vec4(c, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
   });
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1800, 32, 16), material);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1800, 48, 24), material);
   mesh.renderOrder = -1;
   mesh.frustumCulled = false;
   return { mesh, uniforms };
@@ -161,62 +172,175 @@ function getGrassTexture() {
 export function makeMountains(center = new THREE.Vector3(300, 0, 0)) {
   const g = new THREE.Group();
   const rand = mulberry32(11);
-  // No haze on the mountains (it made them look see-through); their blue-grey rock
-  // already reads as far away.
-  // Both sides drawn: the rugged bumps can tip a face inside-out, which made holes you could see through.
-  const material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, fog: false, side: THREE.DoubleSide });
-  const rock = new THREE.Color('#8794ab');
-  const rock2 = new THREE.Color('#76849c');
+  // No fog on the mountains (it made them look see-through): their colors are mixed toward the
+  // haze here instead, so they still read as far away.
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide });
+  const forest = new THREE.Color('#4f6f55');
+  const rock = new THREE.Color('#7f8aa0');
+  const rock2 = new THREE.Color('#68748c');
   const snow = new THREE.Color('#f4f7fb');
+  const haze = new THREE.Color('#b9cfe6');
+  const c = new THREE.Color();
+  const n3 = new THREE.Vector3();
   for (let i = 0; i < 22; i++) {
     const a = (i / 22) * Math.PI * 2 + rand() * 0.2;
     const dist = 1450 + rand() * 450;
     const r = 220 + rand() * 260;
     const h = 260 + rand() * 330;
-    const geo = new THREE.ConeGeometry(r, h, 9, 6).toNonIndexed();
+    // Turned from a concave profile (ConeGeometry drops half its triangles when it has several
+    // height segments, which left holes).
+    const rows = 32;
+    const profile = [];
+    for (let k = 0; k <= rows; k++) profile.push(new THREE.Vector2(k === rows ? 0 : r * (1 - k / rows) ** 1.3, -h / 2 + (k / rows) * h));
+    const geo = new THREE.LatheGeometry(profile, 72);
     const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
+    // Ridges running down from the peak with gullies between them, plus rocky lumps.
+    const ridgeAt = (ang, up) => {
+      const w = noise(Math.cos(ang) * 2.2 + i * 5, Math.sin(ang) * 2.2 + up * 1.2) * 0.65 + noise(Math.cos(ang) * 5 + i, Math.sin(ang) * 5 - up * 2) * 0.35;
+      return 1 - Math.abs(2 * w - 1);
+    };
+    const ridges = new Float32Array(pos.count);
     for (let k = 0; k < pos.count; k++) {
       const x = pos.getX(k);
       const y = pos.getY(k);
       const z = pos.getZ(k);
       const up = (y + h / 2) / h; // 0 at the base, 1 at the peak
-      const n = noise(x * 0.02 + i * 7, z * 0.02 + y * 0.01);
-      if (up < 0.98) pos.setXYZ(k, x * (0.92 + n * 0.16), y + (n - 0.5) * h * 0.03, z * (0.92 + n * 0.16));
-      c.copy(up > 0.6 + n * 0.15 ? snow : n > 0.5 ? rock : rock2);
+      const ang = Math.atan2(z, x);
+      const ridge = ridgeAt(ang, up);
+      ridges[k] = ridge;
+      const lump = noise(x * 0.012 + i * 3, z * 0.012 + y * 0.01) - 0.5;
+      const bump = 0.8 + ridge * 0.32 + lump * 0.12;
+      pos.setXYZ(k, x * bump, y + (ridge - 0.5) * h * 0.05 * up, z * bump);
+    }
+    geo.computeVertexNormals();
+    const nor = geo.attributes.normal;
+    const colors = new Float32Array(pos.count * 3);
+    for (let k = 0; k < pos.count; k++) {
+      const x = pos.getX(k);
+      const y = pos.getY(k);
+      const z = pos.getZ(k);
+      const up = (y + h / 2) / h;
+      const n = noise(x * 0.01 + i * 7, z * 0.01 + y * 0.006);
+      const flat = n3.fromBufferAttribute(nor, k).y;
+      // Rock in bands (strata), forest at the foot, snow on the high slopes and down the gullies.
+      c.copy(rock).lerp(rock2, 0.5 + 0.5 * Math.sin(y * 0.03 + n * 5));
+      c.lerp(forest, 1 - smoothstep(0.1, 0.28 + n * 0.12, up));
+      const snowLine = 0.47 + n * 0.16 + ridges[k] * 0.1;
+      c.lerp(snow, smoothstep(snowLine, snowLine + 0.05, up) * smoothstep(0.05, 0.3, flat));
+      c.lerp(haze, 0.3);
       colors.set([c.r, c.g, c.b], k * 3);
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.computeVertexNormals();
     const m = new THREE.Mesh(geo, material);
     m.position.set(center.x + Math.cos(a) * dist, h / 2 - 20, center.z + Math.sin(a) * dist);
     m.rotation.y = rand() * Math.PI;
+    m.userData.noShadow = true;
     g.add(m);
   }
   return g;
 }
 
+// Puffy clouds with flat bottoms, shaded once when built (sunlit white tops, blue-grey
+// undersides), all merged into one mesh. Plus a few thin wisps high up.
 export function makeClouds() {
   const g = new THREE.Group();
-  const puff = new THREE.IcosahedronGeometry(1, 2);
-  const white = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#9aa4b0' });
   const rand = mulberry32(7);
-  for (let c = 0; c < 45; c++) {
-    const cloud = new THREE.Group();
-    const puffs = 6 + Math.floor(rand() * 5);
-    for (let k = 0; k < puffs; k++) {
-      const m = new THREE.Mesh(puff, white);
-      m.userData.noShadow = true;
-      const r = 7 + rand() * 9;
-      m.scale.set(r * 1.2, r * 0.6, r);
-      m.position.set((k - puffs / 2) * 8 + rand() * 4, rand() * 5, rand() * 12 - 6);
-      cloud.add(m);
+  // One indexed puff (the icosahedron comes unindexed: three copies of every corner).
+  const raw = new THREE.IcosahedronGeometry(1, 2).attributes.position;
+  const corners = new Map();
+  const unique = [];
+  const index = [];
+  for (let j = 0; j < raw.count; j++) {
+    const key = [raw.getX(j), raw.getY(j), raw.getZ(j)].map((n) => n.toFixed(4)).join();
+    if (!corners.has(key)) {
+      corners.set(key, unique.length / 3);
+      unique.push(raw.getX(j), raw.getY(j), raw.getZ(j));
     }
-    cloud.position.set((rand() - 0.3) * 1600, 80 + rand() * 90, (rand() - 0.5) * 1600);
-    g.add(cloud);
+    index.push(corners.get(key));
+  }
+  const pp = new THREE.Float32BufferAttribute(unique, 3);
+  const per = pp.count;
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  const top = new THREE.Color('#ffffff');
+  const under = new THREE.Color('#aebdd0');
+  const c = new THREE.Color();
+  const v = new THREE.Vector3();
+  let base = 0;
+  for (let cl = 0; cl < 45; cl++) {
+    const cx = (rand() - 0.3) * 1600;
+    const cy = 80 + rand() * 90;
+    const cz = (rand() - 0.5) * 1600;
+    const puffs = 9 + Math.floor(rand() * 7);
+    const width = puffs * 6;
+    for (let k = 0; k < puffs; k++) {
+      // Bigger puffs in the middle make a dome; all of them sit on the same flat bottom.
+      const mid = 1 - Math.abs(k / (puffs - 1) - 0.5) * 2;
+      const r = 6 + rand() * 6 + mid * 7;
+      const px = (k / (puffs - 1) - 0.5) * width + rand() * 4;
+      const py = r * 0.25 + rand() * 3 + mid * 4;
+      const pz = rand() * 14 - 7;
+      for (let j = 0; j < per; j++) {
+        v.fromBufferAttribute(pp, j);
+        // Shade by the puff's own normal: lit toward the sun, darker below.
+        const lit = 0.82 + 0.22 * Math.max(0, v.dot(SUN_DIR));
+        const x = px + v.x * r * 1.25;
+        const y = Math.max(0, py + v.y * r * 0.7);
+        const z = pz + v.z * r;
+        c.copy(under).lerp(top, smoothstep(0, 16, y)).multiplyScalar(lit);
+        positions.push(cx + x, cy + y, cz + z);
+        colors.push(c.r, c.g, c.b);
+      }
+      for (const i of index) indices.push(base + i);
+      base += per;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  const clouds = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true }));
+  clouds.userData.noShadow = true;
+  g.add(clouds);
+
+  // Wisps: thin streaky cloud high above, lying flat.
+  const wisp = new THREE.MeshBasicMaterial({ map: getWispTexture(), transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide });
+  for (let k = 0; k < 7; k++) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(700, 160), wisp);
+    m.rotation.set(-Math.PI / 2, 0, rand() * 0.6 - 0.3);
+    m.position.set((rand() - 0.3) * 2000, 380 + rand() * 120, (rand() - 0.5) * 2000);
+    m.userData.noShadow = true;
+    g.add(m);
   }
   return g;
+}
+
+let wispTexture = null;
+function getWispTexture() {
+  if (wispTexture) return wispTexture;
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 128;
+  const g = c.getContext('2d');
+  const rand = mulberry32(23);
+  for (let i = 0; i < 70; i++) {
+    const x = 40 + rand() * 432;
+    const y = 30 + rand() * 68;
+    const len = 60 + rand() * 160;
+    g.save();
+    g.translate(x, y);
+    g.scale(len / 20, 1);
+    const grad = g.createRadialGradient(0, 0, 0, 0, 0, 20);
+    grad.addColorStop(0, `rgba(255,255,255,${0.15 + rand() * 0.25})`);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(-20, -20, 40, 40);
+    g.restore();
+  }
+  wispTexture = new THREE.CanvasTexture(c);
+  wispTexture.colorSpace = THREE.SRGBColorSpace;
+  return wispTexture;
 }
 
 // --- Landscape around a track --------------------------------------------------------------

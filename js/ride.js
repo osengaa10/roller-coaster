@@ -413,6 +413,7 @@ export class Ride {
     u.top.value.copy(this.sky.top).lerp(DUSK_TOP, this.dusk);
     u.horizon.value.copy(this.sky.horizon).lerp(DUSK_HORIZON, this.dusk);
     u.spaceMix.value = space;
+    u.dusk.value = this.dusk;
     this.skyDome.mesh.position.copy(this.camera.position);
     this.scene.fog.color.copy(u.horizon.value).lerp(SPACE, space);
     this.scene.fog.near = 250 + h * 2;
