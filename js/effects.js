@@ -1,6 +1,8 @@
 // Short-lived particle effects: star sparkles, water splashes, fireworks.
 import * as THREE from 'three';
 import * as sound from './sound.js';
+import { glowTexture } from './textures.js';
+import { quality } from './quality.js';
 
 export class Effects {
   constructor(scene) {
@@ -39,7 +41,8 @@ export class Effects {
       gravity: 0,
       drag: 0,
       life: 0.6,
-      size: 0.14,
+      size: 0.18,
+      glow: true,
     });
   }
 
@@ -141,8 +144,11 @@ export function getDot() {
 }
 
 class Burst {
-  constructor(scene, { at, count, colors, speed = [8, 14], velocity = null, gravity = 4, drag = 0.6, life = 1.6, size = 1 }) {
+  // glow: light, not water: blended additively, twinkling, with a flash where it bursts.
+  constructor(scene, { at, count, colors, speed = [8, 14], velocity = null, gravity = 4, drag = 0.6, life = 1.6, size = 1, glow = false, flash = 0 }) {
     this.scene = scene;
+    this.glow = glow;
+    this.size = size;
     this.life = life;
     this.age = 0;
     this.gravity = gravity;
@@ -171,10 +177,17 @@ class Burst {
       transparent: true,
       depthWrite: false,
       fog: false,
+      blending: glow ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
     this.points = new THREE.Points(this.geo, this.mat);
     this.points.frustumCulled = false;
     scene.add(this.points);
+    if (flash > 0) {
+      this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: colors[0], blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false }));
+      this.flash.position.copy(at);
+      this.flashSize = flash * quality().glow;
+      scene.add(this.flash);
+    }
   }
 
   update(dt) {
@@ -188,6 +201,13 @@ class Burst {
     }
     pos.needsUpdate = true;
     this.mat.opacity = Math.max(0, 1 - Math.pow(this.age / this.life, 2));
+    if (this.glow) this.mat.size = this.size * (0.8 + 0.35 * Math.sin(this.age * 40));
+    if (this.flash) {
+      const t = this.age / 0.5;
+      this.flash.visible = t < 1;
+      this.flash.scale.setScalar(this.flashSize * (0.5 + t));
+      this.flash.material.opacity = Math.max(0, 1 - t) * 0.9;
+    }
     return this.age < this.life;
   }
 
@@ -195,6 +215,10 @@ class Burst {
     this.scene.remove(this.points);
     this.geo.dispose();
     this.mat.dispose();
+    if (this.flash) {
+      this.scene.remove(this.flash);
+      this.flash.material.dispose();
+    }
   }
 }
 
@@ -211,7 +235,11 @@ class Rocket {
     start.y = Math.max(0, target.y - 30);
     this.start = start;
     this.dot = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), new THREE.MeshBasicMaterial({ color: colors[0], fog: false }));
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: colors[0], blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false }));
+    halo.scale.setScalar(4);
+    this.dot.add(halo);
     this.dot.visible = false;
+    this.lastTrail = 0;
     effects.scene.add(this.dot);
   }
 
@@ -222,9 +250,14 @@ class Rocket {
     if (t < 1) {
       this.dot.visible = true;
       this.dot.position.lerpVectors(this.start, this.target, 1 - (1 - t) * (1 - t));
+      // A sparkly trail behind it on the way up.
+      if (this.age - this.lastTrail > 0.05) {
+        this.lastTrail = this.age;
+        this.effects.burst({ at: this.dot.position.clone(), count: 4, colors: ['#fff4c0', this.colors[0]], speed: [0.5, 1.5], gravity: 3, life: 0.6, size: 0.8, glow: true });
+      }
       return true;
     }
-    this.effects.burst({ at: this.target, count: 140, colors: this.colors, speed: [8, 13], gravity: 4, life: 2.4, size: 2.2 });
+    this.effects.burst({ at: this.target, count: 140, colors: this.colors, speed: [8, 13], gravity: 4, life: 2.4, size: 2.2, glow: true, flash: 40 });
     sound.firework();
     return false;
   }
@@ -233,6 +266,7 @@ class Rocket {
     this.effects.scene.remove(this.dot);
     this.dot.geometry.dispose();
     this.dot.material.dispose();
+    this.dot.children[0].material.dispose();
   }
 }
 

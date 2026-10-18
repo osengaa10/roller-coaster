@@ -7,7 +7,7 @@ import { makeBeachLandscape } from './tropical.js';
 import { getDot, makeMist } from './effects.js';
 import { mulberry32, fbm, noise } from './nature.js';
 import { makeWater } from './water.js';
-import { plankTexture, concreteTexture, tileTexture, causticsTexture, drainTexture, stoneTexture } from './textures.js';
+import { plankTexture, concreteTexture, tileTexture, causticsTexture, drainTexture, stoneTexture, glowTexture } from './textures.js';
 
 const RT = 1.15; // trough / tube radius
 const SINK = 0.12; // the raft rides this far above the bottom of the trough
@@ -902,11 +902,16 @@ export function makeSlideWorld(tr, eye) {
     }
     for (let i = a + 6; i < b - 4; i += 5) {
       for (const s of [-1, 1]) {
-        const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), new THREE.MeshBasicMaterial({ color: crystalColors[(i + s + 2) % 4] }));
+        const color = crystalColors[(i + s + 2) % 4];
+        const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), new THREE.MeshBasicMaterial({ color }));
         crystal.position.copy(c(i).addScaledVector(side(i), s * 2.9).addScaledVector(U(i), 0.6 + ((i * 7) % 5) * 0.4));
         crystal.scale.set(1, 1.8, 1);
         crystal.rotation.set(i, i * 2, s);
-        g.add(crystal);
+        crystal.userData.noShadow = true;
+        const shine = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.7, depthWrite: false }));
+        shine.position.copy(crystal.position);
+        shine.scale.setScalar(2.4);
+        g.add(crystal, shine);
       }
     }
     // The waterfall over the way in.
