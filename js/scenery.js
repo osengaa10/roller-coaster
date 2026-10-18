@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { supportSpots, supportLegs, starSpots, splashSpot, tunnelRuns } from './track.js';
 import { makeClouds, makeMountains, makeLandscape, getGrassTexture, merge } from './nature.js';
 import { concreteTexture, plankTexture, gratingTexture, stoneTexture, glowTexture } from './textures.js';
+import { makeWater } from './water.js';
 
 const RAIL_GAP = 0.6; // half distance between rails
 const SPINE_DROP = 0.6; // spine center below the rails
@@ -304,10 +305,9 @@ export function makeTrackWorld(tr, eye) {
   if (splash !== null) {
     pondAt = P(splash);
     const sand = new THREE.Mesh(new THREE.CircleGeometry(11, 40), mat('#e9d8a6'));
-    const water = new THREE.Mesh(
-      new THREE.CircleGeometry(9.5, 40),
-      new THREE.MeshPhongMaterial({ color: '#3a8fd0', emissive: '#0b3054', shininess: 120, specular: '#ffffff' }),
-    );
+    const pondMat = makeWater({ color: '#3a8fd0', repeat: [4, 4], flow: [0.02, 0.015], strength: 0.5, emissive: '#082848' });
+    updates.push((dt, time) => pondMat.userData.tick(time));
+    const water = new THREE.Mesh(new THREE.CircleGeometry(9.5, 48), pondMat);
     sand.rotation.x = water.rotation.x = -Math.PI / 2;
     sand.position.set(pondAt.x, 0.04, pondAt.z);
     water.position.set(pondAt.x, 0.08, pondAt.z);

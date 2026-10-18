@@ -3,9 +3,11 @@
 import * as THREE from 'three';
 import { supportSpots, supportLegs, starSpots, splashSpot, tunnelRuns } from './track.js';
 import { tube, beam, mat, shiny, Y_AXIS } from './scenery.js';
-import { makeBeachLandscape, getWaveTexture } from './tropical.js';
-import { getDot } from './effects.js';
-import { mulberry32, fbm } from './nature.js';
+import { makeBeachLandscape } from './tropical.js';
+import { getDot, makeMist } from './effects.js';
+import { mulberry32, fbm, noise } from './nature.js';
+import { makeWater } from './water.js';
+import { plankTexture, concreteTexture, tileTexture, causticsTexture, drainTexture, stoneTexture } from './textures.js';
 
 const RT = 1.15; // trough / tube radius
 const SINK = 0.12; // the raft rides this far above the bottom of the trough
@@ -169,6 +171,31 @@ function fallTexture() {
   return t;
 }
 
+// A rounded boulder, lumpy and flat underneath, grey with moss on top (vertex colors, so the
+// instance color just tints it).
+function boulderGeometry() {
+  const geo = new THREE.IcosahedronGeometry(1, 2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const v = new THREE.Vector3();
+  const c = new THREE.Color();
+  const rock = new THREE.Color('#8d8a84');
+  const rock2 = new THREE.Color('#a59d90');
+  const moss = new THREE.Color('#5f8a3a');
+  for (let k = 0; k < pos.count; k++) {
+    v.fromBufferAttribute(pos, k);
+    const n = noise(v.x * 1.8 + 3, v.z * 1.8 + v.y * 1.8);
+    v.multiplyScalar(0.82 + n * 0.36);
+    v.y = Math.max(v.y, -0.45);
+    pos.setXYZ(k, v.x, v.y, v.z);
+    c.copy(rock).lerp(rock2, noise(v.x * 4, v.z * 4 + v.y * 3)).lerp(moss, v.y > 0.3 + n * 0.25 ? 0.75 : 0);
+    colors.set([c.r, c.g, c.b], k * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function duckGeometry() {
   const g = new THREE.Group();
   const yellow = mat('#ffd23f', { emissive: '#6a5200' });
@@ -241,22 +268,28 @@ export function makeSlideWorld(tr, eye) {
   }
 
   // Open trough: a fiberglass half-pipe in his crayon colors, with a rolled lip on each edge.
-  const glass = new THREE.MeshPhongMaterial({ color: '#ffffff', vertexColors: true, side: THREE.DoubleSide, shininess: 80, specular: '#555555', emissive: '#2a2a2a' });
+  const glass = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, side: THREE.DoubleSide, roughness: 0.2, metalness: 0, emissive: '#1e1e1e' });
+  // The outside of the shell is a little darker and duller than the polished inside.
+  glass.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n  if ( gl_FrontFacing ) diffuseColor.rgb *= 0.8;');
+  };
+  glass.customProgramCacheKey = () => 'slide-shell';
   const lip = shiny('#ffffff');
   const troughPaint = (i) => paint(i).map((v) => v * 0.85 + 0.15);
   const stripes = tubeStripeTexture();
-  const tubeMat = new THREE.MeshPhongMaterial({
+  const tubeMat = new THREE.MeshStandardMaterial({
     color: '#ffffff',
     vertexColors: true,
     map: stripes,
     transparent: true,
     opacity: 0.6,
     side: THREE.DoubleSide,
-    shininess: 100,
-    specular: '#888888',
+    roughness: 0.12,
+    metalness: 0,
     depthWrite: false,
   });
   const collars = [];
+  const seams = []; // bolted joints between the open trough's fiberglass sections
   // Rapids: the channel's middle, its two edges, and a point on its floor `x` meters off-center.
   const centerR = (i) => P(i).addScaledVector(U(i), RW - SINK);
   const edgeR = (i, s) => centerR(i).addScaledVector(U(i), -RW * Math.cos(RAPIDS_ARC)).addScaledVector(side(i), s * RW * Math.sin(RAPIDS_ARC));
@@ -282,7 +315,8 @@ export function makeSlideWorld(tr, eye) {
         if (tr.special[i] === 1 && phase < tr.step) crests.push(i);
       }
     } else if (run.kind === 'open') {
-      g.add(new THREE.Mesh(tube(ids, center, D, side, RT, { sides: 14, arc: OPEN_ARC, colorAt: troughPaint }), glass));
+      g.add(new THREE.Mesh(tube(ids, center, D, side, RT, { sides: 18, arc: OPEN_ARC, colorAt: troughPaint }), glass));
+      for (let k = 0; k < ids.length; k += Math.max(1, Math.round(3 / tr.step))) seams.push(ids[k]);
       for (const s of [-1, 1]) {
         const edge = (i) => center(i).addScaledVector(U(i), -RT * Math.cos(OPEN_ARC)).addScaledVector(side(i), s * RT * Math.sin(OPEN_ARC));
         g.add(new THREE.Mesh(tube(ids, edge, U, side, 0.1, { sides: 6 }), lip));
@@ -296,13 +330,23 @@ export function makeSlideWorld(tr, eye) {
     }
   }
   if (boulders.length) {
-    const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), mat('#ffffff', { flatShading: true }), boulders.length);
-    const tones = ['#8d8f94', '#a39a8e', '#7b726a'].map((c) => new THREE.Color(c));
+    const rocks = new THREE.InstancedMesh(boulderGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }), boulders.length);
+    const tones = ['#ffffff', '#e8e2d8', '#d0cac2'].map((c) => new THREE.Color(c));
     boulders.forEach(([at, r, turn], k) => {
       rocks.setMatrixAt(k, m.compose(at, new THREE.Quaternion().setFromAxisAngle(Y_AXIS, turn), new THREE.Vector3(r, r * 0.7, r)));
       rocks.setColorAt(k, tones[k % tones.length]);
     });
     g.add(rocks);
+  }
+  if (seams.length) {
+    // A flange ring round the outside of the trough, centered under it.
+    const flange = new THREE.TorusGeometry(RT + 0.05, 0.05, 6, 24, OPEN_ARC * 2).rotateZ(-Math.PI / 2 - OPEN_ARC);
+    const ring = new THREE.InstancedMesh(flange, shiny('#ffffff'), seams.length);
+    seams.forEach((i, k) => {
+      ring.setMatrixAt(k, frame(i).setPosition(center(i)));
+      ring.setColorAt(k, new THREE.Color().fromArray(troughPaint(i)).multiplyScalar(0.85));
+    });
+    g.add(ring);
   }
   if (collars.length) {
     const ring = new THREE.InstancedMesh(new THREE.TorusGeometry(RT + 0.06, 0.09, 6, 20), shiny('#ffffff'), collars.length);
@@ -312,10 +356,10 @@ export function makeSlideWorld(tr, eye) {
 
   // Water running down every bit of slide, scrolled along so it flows.
   const streaks = streakTexture();
-  const waterMat = new THREE.MeshPhongMaterial({ color: '#bfeaff', map: streaks, transparent: true, opacity: 0.75, shininess: 120, specular: '#ffffff', depthWrite: false, side: THREE.DoubleSide });
+  const waterMat = makeWater({ color: '#cdeeff', map: streaks, opacity: 0.78, side: THREE.DoubleSide, repeat: [1, 1.5], flow: [0.03, -0.45], strength: 0.5, emissive: '#16384a' });
   const foam = streakTexture(true);
   // Rapids water: churning turquoise with foam streaks, thick enough that the channel doesn't show through.
-  const foamMat = new THREE.MeshPhongMaterial({ color: '#8fe3f5', emissive: '#1a5a70', map: foam, transparent: true, opacity: 0.97, shininess: 80, specular: '#ffffff', depthWrite: false, side: THREE.DoubleSide });
+  const foamMat = makeWater({ color: '#a5ecfa', emissive: '#1a5a70', map: foam, opacity: 0.97, side: THREE.DoubleSide, repeat: [2, 1.5], flow: [0.05, -1.2], strength: 0.8, roughness: 0.12 });
   for (const run of runs) {
     const ids = fewer(run.ids);
     if (ids.length < 2) continue;
@@ -326,10 +370,12 @@ export function makeSlideWorld(tr, eye) {
     water.renderOrder = 1;
     g.add(water);
   }
-  updates.push((dt) => {
+  updates.push((dt, time) => {
     streaks.offset.y -= dt * 1.6;
     foam.offset.y -= dt * 4.5;
     stripes.offset.y += dt * 0.02;
+    waterMat.userData.tick(time);
+    foamMat.userData.tick(time);
   });
 
   // Rapids whitewater: two layers of foam sitting on the wave crests (standing waves stay put,
@@ -496,11 +542,11 @@ export function makeSlideWorld(tr, eye) {
     const inner = [new THREE.Vector2(b.drainR * 0.85, bottomY - 0.25), ...pts, new THREE.Vector2(b.R + 0.5, b.rim + 0.05), new THREE.Vector2(b.R + 0.75, b.rim + 0.55)];
     const funnel = new THREE.Mesh(
       new THREE.LatheGeometry(inner, 56),
-      new THREE.MeshPhongMaterial({ map: bowlTexture(color), side: THREE.DoubleSide, shininess: 80, specular: '#555555' }),
+      new THREE.MeshStandardMaterial({ map: bowlTexture(color), side: THREE.DoubleSide, roughness: 0.18, metalness: 0 }),
     );
     funnel.position.set(b.center.x, 0, b.center.z);
     const outerPts = inner.map((v) => new THREE.Vector2(v.x + 0.2, v.y - 0.22));
-    const shell = new THREE.Mesh(new THREE.LatheGeometry(outerPts, 56), mat('#f4f6f8', { side: THREE.DoubleSide }));
+    const shell = new THREE.Mesh(new THREE.LatheGeometry(outerPts, 56), new THREE.MeshStandardMaterial({ color: '#eef1f4', side: THREE.DoubleSide, roughness: 0.4 }));
     shell.position.copy(funnel.position);
     const rimRing = new THREE.Mesh(new THREE.TorusGeometry(b.R + 0.8, 0.22, 8, 64), shiny('#ffffff'));
     rimRing.rotation.x = -Math.PI / 2;
@@ -509,10 +555,10 @@ export function makeSlideWorld(tr, eye) {
 
     // The whirlpool: a thin layer of water over the funnel, turning the way he goes round.
     const swirlPts = pts.filter((v) => v.x < b.R).map((v) => new THREE.Vector2(v.x, v.y + 0.07));
-    const swirl = new THREE.Mesh(
-      new THREE.LatheGeometry(swirlPts, 48),
-      new THREE.MeshBasicMaterial({ map: swirlTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide }),
-    );
+    const swirlMat = makeWater({ color: '#ffffff', map: swirlTexture(), opacity: 0.999, side: THREE.DoubleSide, repeat: [3, 3], flow: [0.04, 0.03], strength: 0.4, emissive: '#3a6a80' });
+    swirlMat.transparent = true;
+    swirlMat.depthWrite = false;
+    const swirl = new THREE.Mesh(new THREE.LatheGeometry(swirlPts, 48), swirlMat);
     // Map the swirl straight down from above, so its arms spiral into the drain.
     const sp = swirl.geometry.attributes.position;
     const uvs = swirl.geometry.attributes.uv;
@@ -523,11 +569,13 @@ export function makeSlideWorld(tr, eye) {
     const a = P(b.spiralStart + 2).sub(new THREE.Vector3(b.center.x, 0, b.center.z));
     const v = T(b.spiralStart + 2);
     const spin = Math.sign(a.z * v.x - a.x * v.z) || 1;
-    updates.push((dt) => {
+    updates.push((dt, time) => {
       swirl.rotation.y += dt * spin * 1.1;
+      swirlMat.userData.tick(time);
     });
 
-    const hole = new THREE.Mesh(new THREE.CircleGeometry(b.drainR * 0.95, 24), new THREE.MeshBasicMaterial({ color: '#0d2a4a' }));
+    const hole = new THREE.Mesh(new THREE.CircleGeometry(b.drainR * 1.6, 32), new THREE.MeshBasicMaterial({ map: drainTexture(), transparent: true, depthWrite: false }));
+    hole.renderOrder = 2;
     hole.rotation.x = -Math.PI / 2;
     hole.position.set(b.center.x, bottomY - 0.2, b.center.z);
     g.add(hole);
@@ -567,7 +615,11 @@ export function makeSlideWorld(tr, eye) {
   const orange = shiny('#ff8c42');
   const deckY = startTop - 0.6;
   // The deck is beside the slide (the slide itself starts from the little pool at the top).
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(12, 0.4, 5.2), mat('#d9a066'));
+  const deckBoards = plankTexture().clone();
+  deckBoards.needsUpdate = true;
+  deckBoards.repeat.set(3, 1.3);
+  const wood = new THREE.MeshLambertMaterial({ color: '#f0c896', map: deckBoards });
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(12, 0.4, 5.2), wood);
   deck.position.set(3, deckY, -4.1);
   tower.add(deck);
   const corners = [[-3, -6.5], [9, -6.5], [-3, 2.1], [9, 2.1]];
@@ -583,7 +635,7 @@ export function makeSlideWorld(tr, eye) {
   // Stairs: flights going back and forth up the outside, each with a landing.
   const flights = Math.max(1, Math.round(deckY / 3));
   const rise = deckY / flights;
-  const stepMesh = new THREE.InstancedMesh(unitBox, mat('#e8b878'), flights * 10);
+  const stepMesh = new THREE.InstancedMesh(unitBox, wood, flights * 10);
   let si = 0;
   for (let f = 0; f < flights; f++) {
     const dir = f % 2 ? -1 : 1;
@@ -595,7 +647,7 @@ export function makeSlideWorld(tr, eye) {
     const rail = new THREE.Mesh(unitCyl, shiny('#ffffff'));
     rail.applyMatrix4(beam(m, new THREE.Vector3(x0, f * rise + 1, -8.1), new THREE.Vector3(x0 + dir * 6, (f + 1) * rise + 1, -8.1), 0.05));
     tower.add(rail);
-    const landing = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 1.6), mat('#d9a066'));
+    const landing = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 1.6), wood);
     landing.position.set(dir > 0 ? x0 + 6.9 : x0 - 6.9, (f + 1) * rise, -7.4);
     if (f < flights - 1) tower.add(landing);
   }
@@ -626,7 +678,24 @@ export function makeSlideWorld(tr, eye) {
   tent.setAttribute('color', new THREE.BufferAttribute(tc, 3));
   const roof = new THREE.Mesh(tent, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
   roof.position.set(3, roofY + 1.5, -2.2);
-  tower.add(roof);
+  // A scalloped valance hanging round the edge, in the same stripes.
+  const flaps = [];
+  const flapCols = [];
+  for (let k = 0; k < 24; k++) {
+    const a0 = (k / 24) * Math.PI * 2;
+    const a1 = ((k + 1) / 24) * Math.PI * 2;
+    const am = (a0 + a1) / 2;
+    const col = new THREE.Color(Math.floor(k / 2) % 2 ? '#ffffff' : '#ff4d6d');
+    flaps.push(Math.cos(a0) * 8, -1.3, Math.sin(a0) * 8, Math.cos(am) * 8, -2.0, Math.sin(am) * 8, Math.cos(a1) * 8, -1.3, Math.sin(a1) * 8);
+    for (let j = 0; j < 3; j++) flapCols.push(col.r, col.g, col.b);
+  }
+  const flapGeo = new THREE.BufferGeometry();
+  flapGeo.setAttribute('position', new THREE.Float32BufferAttribute(flaps, 3));
+  flapGeo.setAttribute('color', new THREE.Float32BufferAttribute(flapCols, 3));
+  flapGeo.computeVertexNormals();
+  const valance = new THREE.Mesh(flapGeo, roof.material);
+  valance.position.copy(roof.position);
+  tower.add(roof, valance);
   const flagPole = posed(new THREE.Mesh(unitCyl, shiny('#ffffff')), beam(m, new THREE.Vector3(3, roofY + 2.8, -2.2), new THREE.Vector3(3, roofY + 6, -2.2), 0.06));
   const flagShape = new THREE.Shape();
   flagShape.moveTo(0, 0);
@@ -641,12 +710,11 @@ export function makeSlideWorld(tr, eye) {
     flag.scale.x = 1 + Math.sin(time * 5) * 0.08;
   });
   // A little pool at the top the slide starts from.
-  const startPool = new THREE.Mesh(new THREE.BoxGeometry(5, 1.0, 4.2), mat('#ffffff'));
+  const startPool = new THREE.Mesh(new THREE.BoxGeometry(5, 1.0, 4.2), new THREE.MeshStandardMaterial({ color: '#ffffff', map: concreteTexture(), roughness: 0.8 }));
   startPool.position.set(-1.6, startTop - 0.35, 0);
-  const startWater = new THREE.Mesh(
-    new THREE.BoxGeometry(4.4, 0.1, 3.6),
-    new THREE.MeshPhongMaterial({ color: '#4fd2f0', emissive: '#0b4060', shininess: 120, specular: '#ffffff' }),
-  );
+  const startWaterMat = makeWater({ color: '#4fd2f0', repeat: [1.5, 1.5], flow: [0.06, 0.04] });
+  updates.push((dt, time) => startWaterMat.userData.tick(time));
+  const startWater = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.1, 3.6), startWaterMat);
   startWater.position.set(-1.6, startTop + 0.17, 0);
   tower.add(startPool, startWater);
   // The deck and stairs go on the far side, so they never block the outside camera's view.
@@ -674,17 +742,40 @@ export function makeSlideWorld(tr, eye) {
   };
   const rimShape = rounded(poolLen + 2.4, poolW + 2.4, 5);
   rimShape.holes.push(rounded(poolLen, poolW, 4));
-  const rim = new THREE.Mesh(new THREE.ExtrudeGeometry(rimShape, { depth: 0.7, bevelEnabled: false }).rotateX(-Math.PI / 2), mat('#f4f7fb'));
-  const waves = getWaveTexture().clone();
-  waves.needsUpdate = true;
-  waves.repeat.set(poolLen / 12, poolW / 12);
-  const poolWater = new THREE.Mesh(
-    new THREE.ShapeGeometry(rounded(poolLen, poolW, 4)).rotateX(-Math.PI / 2),
-    new THREE.MeshPhongMaterial({ color: '#3fc3ee', map: waves, emissive: '#0a3a5a', shininess: 140, specular: '#ffffff' }),
+  const coping = concreteTexture().clone();
+  coping.needsUpdate = true;
+  coping.repeat.set(0.25, 0.25);
+  const rim = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(rimShape, { depth: 0.7, bevelEnabled: true, bevelSize: 0.08, bevelThickness: 0.08, bevelSegments: 2 }).rotateX(-Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: '#f6f3ec', map: coping, roughness: 0.75 }),
   );
+  // The pool's tiled floor with dark lane lines, light rippling over it, and clear water on top.
+  const floorTiles = tileTexture().clone();
+  floorTiles.needsUpdate = true;
+  floorTiles.repeat.set(0.5, 0.5);
+  const poolFloor = new THREE.Mesh(new THREE.ShapeGeometry(rounded(poolLen, poolW, 4)).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: floorTiles }));
+  poolFloor.position.y = 0.05;
+  const lanes = new THREE.InstancedMesh(unitBox, mat('#1d4e89'), 3);
+  [-poolW / 4, 0, poolW / 4].forEach((z, k) => lanes.setMatrixAt(k, m.makeScale(poolLen - 6, 0.01, 0.3).setPosition(0, 0.065, z)));
+  lanes.userData.noShadow = true;
+  const caustics = [0, 1].map((k) => {
+    const tex = causticsTexture().clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(0.16 + k * 0.05, 0.16 + k * 0.05);
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(rounded(poolLen, poolW, 4)).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    mesh.position.y = 0.075 + k * 0.01;
+    mesh.userData.noShadow = true;
+    return mesh;
+  });
+  const poolMat = makeWater({ color: '#38c4ee', opacity: 0.68, repeat: [0.2, 0.2], flow: [0.012, 0.008], strength: 0.45 });
+  const poolWater = new THREE.Mesh(new THREE.ShapeGeometry(rounded(poolLen, poolW, 4)).rotateX(-Math.PI / 2), poolMat);
   poolWater.position.y = 0.36;
+  poolWater.renderOrder = 1;
   // Floor of the shallow pool (seen through the edge) and lane ropes of bobbing floats.
-  const floats = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), mat('#ffffff'), 2 * Math.floor(poolLen / 0.8));
+  const floats = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 14, 10), shiny('#ffffff', { shininess: 60 }), 2 * Math.floor(poolLen / 0.8));
   let fi = 0;
   for (const z of [-poolW / 2 + 3, poolW / 2 - 3]) {
     for (let x = -poolLen / 2 + 1; x < poolLen / 2 - 1 && fi < floats.count; x += 0.8) {
@@ -694,11 +785,17 @@ export function makeSlideWorld(tr, eye) {
     }
   }
   floats.count = fi;
+  const ladderSteel = shiny('#e8edf2', { shininess: 100, metalness: 0.9 });
   for (const s of [-1, 1]) {
-    const bar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 6, 12, Math.PI), shiny('#d5dbe2'));
+    const bar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.06, 8, 16, Math.PI), ladderSteel);
     bar.position.set(poolLen / 2 + 0.6, 0.9, s * 0.5);
     bar.rotation.y = Math.PI / 2;
-    poolGroup.add(bar);
+    // ...and down into the water.
+    const leg = posed(new THREE.Mesh(unitCyl, ladderSteel), beam(m, new THREE.Vector3(poolLen / 2 - 0.4, 0.05, s * 0.5), new THREE.Vector3(poolLen / 2 + 0.1, 0.9, s * 0.5), 0.06));
+    poolGroup.add(bar, leg);
+  }
+  for (const x of [poolLen / 2 - 0.25, poolLen / 2 - 0.1]) {
+    poolGroup.add(posed(new THREE.Mesh(unitCyl, ladderSteel), beam(m, new THREE.Vector3(x, 0.15 + (poolLen / 2 - x) * 1.2, -0.5), new THREE.Vector3(x, 0.15 + (poolLen / 2 - x) * 1.2, 0.5), 0.04)));
   }
   // Lifeguard chair beside the pool.
   const chair = new THREE.Group();
@@ -713,7 +810,7 @@ export function makeSlideWorld(tr, eye) {
   chair.add(seat, back, shade, shadePole);
   chair.position.set(0, 0, poolW / 2 + 4);
   chair.rotation.y = Math.PI;
-  poolGroup.add(rim, poolWater, floats, chair);
+  poolGroup.add(rim, poolFloor, lanes, ...caustics, poolWater, floats, chair);
   // Loungers along the other side.
   for (let k = 0; k < 5; k++) {
     const lounger = new THREE.Group();
@@ -736,10 +833,15 @@ export function makeSlideWorld(tr, eye) {
   const spill = new THREE.Mesh(new THREE.PlaneGeometry(RT * 1.6, 1.2), new THREE.MeshBasicMaterial({ map: fall, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
   spill.applyMatrix4(frame(lipEnd).setPosition(P(lipEnd).addScaledVector(T(lipEnd), 0.3).add(new THREE.Vector3(0, -0.4, 0))));
   g.add(spill);
+  const spillMist = makeMist(P(lipEnd).addScaledVector(T(lipEnd), 0.6).setY(0.5), 1.4, 40);
+  g.add(spillMist.points);
   updates.push((dt, time) => {
-    waves.offset.set((time * 0.03) % 1, (time * 0.02) % 1);
+    poolMat.userData.tick(time);
+    caustics[0].material.map.offset.set(time * 0.012, time * 0.009);
+    caustics[1].material.map.offset.set(-time * 0.009, time * 0.013);
     fall.offset.y += dt * 2.2;
     floats.position.y = Math.sin(time * 2) * 0.04;
+    spillMist.update(dt);
   });
 
   // Caves where the slide skims along the ground: a rocky hill with jungle on top, dark inside
@@ -749,6 +851,19 @@ export function makeSlideWorld(tr, eye) {
   const caveInside = mat('#2a2230', { side: THREE.BackSide });
   const rock = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
   const crystalColors = ['#6ef3ff', '#ff6ef0', '#b0ff6e', '#ffd36e'];
+  const archMap = stoneTexture().clone();
+  archMap.needsUpdate = true;
+  archMap.repeat.set(5, 1);
+  const archStone = new THREE.MeshLambertMaterial({ color: '#d8c8b4', map: archMap });
+  const basinMat = makeWater({ color: '#4fd2f0', repeat: [1.2, 1.2], flow: [0.05, 0.08], strength: 0.6 });
+  const fall2 = fallTexture();
+  fall2.repeat.set(1.3, 0.8);
+  const mists = [];
+  updates.push((dt, time) => {
+    basinMat.userData.tick(time);
+    fall2.offset.y += dt * 3.1;
+    for (const mist of mists) mist.update(dt);
+  });
   for (const [a, b] of tunnels) {
     const ids = all.slice(a, b + 1);
     const c = (i) => P(i).addScaledVector(U(i), 0.3);
@@ -771,7 +886,7 @@ export function makeSlideWorld(tr, eye) {
     outside.computeVertexNormals();
     g.add(new THREE.Mesh(outside, rock));
     for (const i of [a, b]) {
-      const arch = new THREE.Mesh(new THREE.TorusGeometry(3.7, 0.6, 6, 14, Math.PI), mat('#7d6e60', { flatShading: true }));
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(3.7, 0.6, 8, 24, Math.PI), archStone);
       arch.applyMatrix4(frame(i).setPosition(c(i)));
       g.add(arch);
     }
@@ -788,8 +903,15 @@ export function makeSlideWorld(tr, eye) {
     const curtain = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 6.2), new THREE.MeshBasicMaterial({ map: fall, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
     curtain.applyMatrix4(frame(a).setPosition(c(a).addScaledVector(U(a), 2.2).addScaledVector(T(a), -0.6)));
     curtain.renderOrder = 3;
-    g.add(curtain);
-    const basin = new THREE.Mesh(new THREE.CircleGeometry(4.5, 20), new THREE.MeshPhongMaterial({ color: '#4fd2f0', emissive: '#0b4060', shininess: 100 }));
+    // A second, faster sheet just in front, so the falling water has depth.
+    const sheet = new THREE.Mesh(new THREE.PlaneGeometry(7.0, 6.2), new THREE.MeshBasicMaterial({ map: fall2, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide }));
+    sheet.applyMatrix4(frame(a).setPosition(c(a).addScaledVector(U(a), 2.2).addScaledVector(T(a), -0.9)));
+    sheet.renderOrder = 3;
+    g.add(curtain, sheet);
+    const mist = makeMist(c(a).addScaledVector(T(a), -1.2).setY(0.6), 3.2, 50);
+    mists.push(mist);
+    g.add(mist.points);
+    const basin = new THREE.Mesh(new THREE.CircleGeometry(4.5, 28), basinMat);
     basin.rotation.x = -Math.PI / 2;
     const at = c(a).addScaledVector(T(a), -1.5);
     basin.position.set(at.x, 0.06, at.z);

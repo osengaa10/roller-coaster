@@ -318,6 +318,37 @@ export function makeSprayTrail(scene, count = 160) {
   };
 }
 
+// Mist drifting up where falling water lands: soft puffs that rise, spread and start again.
+export function makeMist(at, width, count = 40) {
+  const pos = new Float32Array(count * 3);
+  const age = Float32Array.from({ length: count }, () => Math.random() * 2);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const material = new THREE.PointsMaterial({ color: '#eef9ff', size: 1.1, map: getDot(), transparent: true, opacity: 0.28, depthWrite: false });
+  const points = new THREE.Points(geo, material);
+  points.frustumCulled = false;
+  const spawn = (k) => {
+    pos[k * 3] = at.x + (Math.random() - 0.5) * width;
+    pos[k * 3 + 1] = at.y + Math.random() * 0.3;
+    pos[k * 3 + 2] = at.z + (Math.random() - 0.5) * width;
+    age[k] = 0;
+  };
+  for (let k = 0; k < count; k++) spawn(k);
+  return {
+    points,
+    update(dt) {
+      for (let k = 0; k < count; k++) {
+        age[k] += dt;
+        if (age[k] > 2) spawn(k);
+        pos[k * 3] += (Math.random() - 0.5) * dt * 0.8;
+        pos[k * 3 + 1] += dt * 0.7;
+        pos[k * 3 + 2] += (Math.random() - 0.5) * dt * 0.8;
+      }
+      geo.attributes.position.needsUpdate = true;
+    },
+  };
+}
+
 // Wind streaks rushing past the camera when the train is really flying (child of the camera).
 export function makeStreaks(count = 80) {
   const pos = new Float32Array(count * 6);

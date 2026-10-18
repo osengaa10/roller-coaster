@@ -21,6 +21,7 @@ const SHELL = [
   'js/draw-slide.js',
   'js/quality.js',
   'js/textures.js',
+  'js/water.js',
   'vendor/three.module.min.js',
   'icons/icon-192.png',
   'icons/apple-touch-icon.png',

@@ -3,6 +3,7 @@
 // Built like nature.js: everything that repeats is instanced so it stays fast on an iPad.
 import * as THREE from 'three';
 import { EARTH_R, fbm, smoothstep, mulberry32, merge, makeClouds, makeEarth } from './nature.js';
+import { makeWater } from './water.js';
 
 export const SEA_LEVEL = -1.5;
 
@@ -351,28 +352,19 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
   const seaColors = new Float32Array(sp.count * 3);
   const lagoon = new THREE.Color('#4fd8e0');
   const deep = new THREE.Color('#1b7fc4');
+  const surf = new THREE.Color('#e9fbff');
   for (let k = 0; k < sp.count; k++) {
     const x = sp.getX(k);
     const z = sp.getZ(k);
     sp.setY(k, SEA_LEVEL - curve(x, z));
     const depth = SEA_LEVEL - (ground(x, z) + curve(x, z));
-    c.copy(lagoon).lerp(deep, smoothstep(2, 13, depth));
+    // Clear turquoise over the sand, deep blue further out, and pale surf right at the shore.
+    c.copy(lagoon).lerp(deep, smoothstep(2, 13, depth)).lerp(surf, 0.45 * (1 - smoothstep(0, 1.6, depth)));
     seaColors.set([c.r, c.g, c.b], k * 3);
   }
   seaGeo.setAttribute('color', new THREE.BufferAttribute(seaColors, 3));
   seaGeo.computeVertexNormals();
-  const waves = getWaveTexture().clone();
-  waves.needsUpdate = true;
-  waves.repeat.set(size / 40, size / 40);
-  const seaMat = new THREE.MeshPhongMaterial({
-    map: waves,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.86,
-    shininess: 90,
-    specular: '#ffffff',
-    depthWrite: false,
-  });
+  const seaMat = makeWater({ color: '#ffffff', vertexColors: true, opacity: 0.86, repeat: [size / 30, size / 30], flow: [0.004, 0.003], strength: 0.6, roughness: 0.08, emissive: '#06263a' });
   const seaMesh = new THREE.Mesh(seaGeo, seaMat);
   seaMesh.renderOrder = 1;
   g.add(seaMesh);
@@ -545,7 +537,7 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
   // Kiddie pools with a mushroom fountain in each.
   const kiddie = scatter(6, 18, 45, true);
   const rim = new THREE.MeshLambertMaterial({ color: '#ffffff' });
-  const kidWater = new THREE.MeshPhongMaterial({ color: '#4fd2f0', emissive: '#0b4060', shininess: 120, specular: '#ffffff' });
+  const kidWater = makeWater({ color: '#4fd2f0', repeat: [1.5, 1.5], flow: [0.05, 0.04], strength: 0.5 });
   const curtain = new THREE.MeshLambertMaterial({ color: '#d8f4ff', transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
   for (const b of kiddie) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(4, 0.35, 8, 30), rim);
@@ -590,7 +582,8 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
   return {
     group: g,
     update(dt, time) {
-      waves.offset.set((time * 0.004) % 1, (time * 0.006) % 1);
+      seaMat.userData.tick(time);
+      kidWater.userData.tick(time);
       for (const b of boats) {
         b.x += Math.cos(b.heading) * b.speed * dt;
         b.z += Math.sin(b.heading) * b.speed * dt;
