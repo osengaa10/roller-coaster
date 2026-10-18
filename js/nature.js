@@ -1,9 +1,63 @@
 // Natural scenery: sky dome, grass, rolling hills, mountains, trees and little ground details.
 // Everything that repeats is instanced so it stays fast on an iPad.
 import * as THREE from 'three';
+import { quality } from './quality.js';
 
 export const SUN_DIR = new THREE.Vector3(-0.45, 0.42, -0.79).normalize();
 export const EARTH_R = 50000; // meters; a pretend-small Earth so its curve shows at ~1.5 km up
+
+// --- Wind and ground detail (shader patches shared by both games) ---------------------------
+
+// The breeze: plants sway by how high each vertex is above the plant's root. WIND.value is the
+// ride's clock (set every frame); strength is meters of sway per meter of height.
+export const WIND = { value: 0 };
+export function windy(material, strength) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.windTime = WIND;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float windTime;').replace(
+      '#include <begin_vertex>',
+      /* glsl */ `#include <begin_vertex>
+      vec3 rootPos = vec3(0.0);
+      #ifdef USE_INSTANCING
+        rootPos = instanceMatrix[3].xyz;
+      #endif
+      float sway = max(transformed.y, 0.0) * ${strength.toFixed(4)} * (0.65 + 0.35 * sin(windTime * 0.37 + rootPos.x * 0.01));
+      transformed.x += sin(windTime * 1.7 + rootPos.x * 0.15 + rootPos.z * 0.1) * sway;
+      transformed.z += cos(windTime * 1.3 + rootPos.z * 0.13) * sway * 0.6;`,
+    );
+  };
+  material.customProgramCacheKey = () => `wind${strength}`;
+  return material;
+}
+
+// Big ground textures repeat every few meters, which shows as a grid far away. Mixing in the same
+// texture at a much bigger, offset scale breaks that up.
+export function detailMap(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      /* glsl */ `#ifdef USE_MAP
+        vec4 texelNear = texture2D( map, vMapUv );
+        vec4 texelFar = texture2D( map, vMapUv * 0.137 + vec2( 0.31, 0.17 ) );
+        diffuseColor *= mix( texelNear, texelFar, 0.45 );
+      #endif`,
+    );
+  };
+  material.customProgramCacheKey = () => 'detail-map';
+  return material;
+}
+
+// Darker low down, lighter up top: a cheap stand-in for light getting into a bush or a crown.
+export function shadeByHeight(geo, lo, hi, dark = 0.6) {
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let k = 0; k < pos.count; k++) {
+    const v = dark + (1 - dark) * smoothstep(lo, hi, pos.getY(k));
+    colors.set([v, v, v], k * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
 
 // --- Noise -------------------------------------------------------------------------------
 
@@ -325,9 +379,9 @@ function getWispTexture() {
   const g = c.getContext('2d');
   const rand = mulberry32(23);
   for (let i = 0; i < 70; i++) {
-    const x = 40 + rand() * 432;
+    const len = 50 + rand() * 130;
+    const x = len + 6 + rand() * (500 - 2 * len);
     const y = 30 + rand() * 68;
-    const len = 60 + rand() * 160;
     g.save();
     g.translate(x, y);
     g.scale(len / 20, 1);
@@ -379,12 +433,19 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     const dry = smoothstep(0.55, 0.8, fbm(x / 400 + 9, z / 400));
     colors.set([shade * (1 + dry * 0.25), shade, shade * (1 - dry * 0.3)], k * 3);
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
+  // Bare rock showing on the steep sides of the hills.
+  const nor = geo.attributes.normal;
+  for (let k = 0; k < pos.count; k++) {
+    const steep = smoothstep(0.93, 0.8, nor.getY(k));
+    if (steep <= 0) continue;
+    for (let j = 0; j < 3; j++) colors[k * 3 + j] += ([1.35, 1.25, 1.2][j] - colors[k * 3 + j]) * steep * 0.7;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   const tex = getGrassTexture().clone();
   tex.needsUpdate = true;
   tex.repeat.set(size / 7, size / 7);
-  g.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: tex, vertexColors: true })));
+  g.add(new THREE.Mesh(geo, detailMap(new THREE.MeshLambertMaterial({ map: tex, vertexColors: true }))));
   g.add(makeEarth(center));
 
   const rand = mulberry32(Math.round(center.x * 7 + center.z * 3) + 1);
@@ -398,7 +459,8 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     mesh.setMatrixAt(k, m.compose(p.set(x, y, z), q, s.set(scale, sy, scale)));
   };
 
-  // Trees: tiered pines and round leafy trees, near ones with soft shadows.
+  // Trees: tiered pines, round leafy trees and white birches. Near ones cast real shadows (or
+  // soft blob shadows when real ones are off); far ones don't.
   const trees = [];
   for (let k = 0; trees.length < 260 && k < 6000; k++) {
     const x = bounds.min.x - 150 + rand() * (bounds.max.x - bounds.min.x + 300);
@@ -412,30 +474,42 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     const z = center.z + Math.sin(a) * (r + (bounds.max.z - bounds.min.z) / 2);
     trees.push({ x, z, near: false });
   }
-  for (const t of trees) {
-    t.pine = rand() < 0.55;
+  trees.forEach((t, k) => {
+    const r = rand();
+    t.kind = r < 0.5 ? 'pine' : r < 0.85 ? 'leafy' : 'birch';
     t.scale = (t.near ? 0.7 : 0.9) + rand() * 0.9;
+    t.sy = t.scale * (0.9 + (k % 5) * 0.06);
+    t.turn = k * 2.4;
+    t.tint = k;
     t.y = heightAt(t.x, t.z);
-  }
-  const pines = trees.filter((t) => t.pine);
-  const leafy = trees.filter((t) => !t.pine);
+  });
   const bark = new THREE.MeshLambertMaterial({ color: '#6b4a32' });
-  const leaves = new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true });
+  const leaves = windy(new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true, vertexColors: true }), 0.018);
   const pineGreens = ['#2f6b3a', '#2a5f34', '#3a7a45', '#24563a'].map((c) => new THREE.Color(c));
   const leafGreens = ['#4f9a3a', '#5fae44', '#3f8a35', '#74b84c', '#8fbf4a'].map((c) => new THREE.Color(c));
-  const parts = [
-    [pines, new THREE.CylinderGeometry(0.25, 0.4, 2.4, 6).translate(0, 1.2, 0), bark, null],
-    [pines, pineFoliage(), leaves, pineGreens],
-    [leafy, new THREE.CylinderGeometry(0.3, 0.5, 3.4, 6).translate(0, 1.7, 0), bark, null],
-    [leafy, leafyFoliage(), leaves, leafGreens],
-  ];
-  for (const [list, shape, material, tints] of parts) {
-    const mesh = new THREE.InstancedMesh(shape, material, list.length);
-    list.forEach((t, k) => {
-      place(mesh, k, t.x, t.y, t.z, t.scale, t.scale * (0.9 + (k % 5) * 0.06), k * 2.4);
-      if (tints) mesh.setColorAt(k, tints[k % tints.length]);
-    });
-    g.add(mesh);
+  const birchGreens = ['#9ccc4a', '#b5d65a', '#86bd45'].map((c) => new THREE.Color(c));
+  const species = {
+    pine: [[new THREE.CylinderGeometry(0.25, 0.4, 2.4, 7).translate(0, 1.2, 0), bark, null], [pineFoliage(), leaves, pineGreens]],
+    leafy: [[new THREE.CylinderGeometry(0.3, 0.5, 3.4, 7).translate(0, 1.7, 0), bark, null], [leafyFoliage(), leaves, leafGreens]],
+    leafyFar: [[new THREE.CylinderGeometry(0.3, 0.5, 3.4, 5).translate(0, 1.7, 0), bark, null], [leafyFoliage(4), leaves, leafGreens]],
+    birch: [[birchTrunk(), new THREE.MeshLambertMaterial({ color: '#ffffff', vertexColors: true }), null], [birchFoliage(), leaves, birchGreens]],
+  };
+  for (const [kind, parts] of Object.entries(species)) {
+    for (const near of [true, false]) {
+      if (kind === 'leafy' && !near) continue; // far leafy trees are 'leafyFar'
+      if (kind === 'leafyFar' && near) continue;
+      const list = trees.filter((t) => (t.kind === kind || (kind === 'leafyFar' && t.kind === 'leafy')) && t.near === near);
+      if (!list.length) continue;
+      for (const [shape, material, tints] of parts) {
+        const mesh = new THREE.InstancedMesh(shape, material, list.length);
+        list.forEach((t, k) => {
+          place(mesh, k, t.x, t.y, t.z, t.scale, t.sy, t.turn);
+          if (tints) mesh.setColorAt(k, tints[t.tint % tints.length]);
+        });
+        if (!near) mesh.userData.noShadow = true;
+        g.add(mesh);
+      }
+    }
   }
   const near = trees.filter((t) => t.near);
   const shadows = new THREE.InstancedMesh(
@@ -444,6 +518,7 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     near.length,
   );
   near.forEach((t, k) => place(shadows, k, t.x + 0.8, t.y + 0.06, t.z + 0.8, t.scale * 2.6, 1));
+  shadows.userData.blobShadow = true;
   g.add(shadows);
 
   // Close to the track: bushes, flowers, grass tufts and rocks rush past and show the speed.
@@ -456,41 +531,48 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
     return out;
   };
   const bushes = scatter(320, 4, 40);
-  const bushMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), leaves, bushes.length);
+  const bushMesh = new THREE.InstancedMesh(shadeByHeight(new THREE.IcosahedronGeometry(1, 1), -0.8, 0.9, 0.55), leaves, bushes.length);
   bushes.forEach((b, k) => {
     const sc = 0.6 + rand() * 0.9;
     place(bushMesh, k, b.x, sc * 0.45, b.z, sc, sc * 0.75);
     bushMesh.setColorAt(k, leafGreens[k % leafGreens.length]);
   });
-  const tufts = scatter(1400, 2.5, 45);
+  // Grass clumps (crossed cards of blades) and flowers with petals on little stems.
+  const tufts = scatter(Math.round(1400 * quality().grass), 2.5, 45);
   const tuftMesh = new THREE.InstancedMesh(
-    new THREE.ConeGeometry(0.12, 0.7, 4).translate(0, 0.35, 0),
-    new THREE.MeshLambertMaterial({ color: '#ffffff' }),
+    grassClumpGeometry(),
+    windy(new THREE.MeshLambertMaterial({ color: '#ffffff', map: grassBladeTexture(), alphaTest: 0.45 }), 0.12),
     tufts.length,
   );
-  const tuftColors = ['#3f8a2a', '#5fae3a', '#79c450'].map((c) => new THREE.Color(c));
+  const tuftColors = ['#e6f5d0', '#ffffff', '#cfe8b0'].map((c) => new THREE.Color(c));
   tufts.forEach((b, k) => {
     place(tuftMesh, k, b.x, 0, b.z, 0.8 + rand() * 0.8, 0.6 + rand() * 0.9);
     tuftMesh.setColorAt(k, tuftColors[k % 3]);
   });
+  tuftMesh.userData.noCast = true;
   const flowers = scatter(900, 3, 50);
   const flowerMesh = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(0.16, 0).translate(0, 0.32, 0),
-    new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#222222' }),
+    flowerGeometry(),
+    new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#222222', vertexColors: true }),
     flowers.length,
   );
+  const stems = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.015, 0.02, 0.32, 4).translate(0, 0.16, 0), new THREE.MeshLambertMaterial({ color: '#4c8a2f' }), flowers.length);
   const petals = ['#ff5d73', '#ffd23f', '#ffffff', '#b388ff', '#ff9f43'].map((c) => new THREE.Color(c));
   flowers.forEach((b, k) => {
-    place(flowerMesh, k, b.x, 0, b.z, 0.8 + rand() * 0.6);
+    const sc = 0.8 + rand() * 0.6;
+    const turn = rand() * Math.PI * 2;
+    place(flowerMesh, k, b.x, 0, b.z, sc, sc, turn);
+    place(stems, k, b.x, 0, b.z, sc, sc, turn);
     flowerMesh.setColorAt(k, petals[k % petals.length]);
   });
+  flowerMesh.userData.noCast = stems.userData.noCast = true;
   const rocks = scatter(90, 5, 60);
   const rockMesh = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: '#8d8f94', flatShading: true }), rocks.length);
   rocks.forEach((b, k) => {
     const sc = 0.3 + rand() * 0.9;
     place(rockMesh, k, b.x, sc * 0.3, b.z, sc, sc * 0.6);
   });
-  g.add(bushMesh, tuftMesh, flowerMesh, rockMesh);
+  g.add(bushMesh, tuftMesh, flowerMesh, stems, rockMesh);
   return g;
 }
 
@@ -498,34 +580,126 @@ export function merge(geos) {
   const parts = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   const count = parts.reduce((n, g) => n + g.attributes.position.count, 0);
   const withUv = parts.every((g) => g.attributes.uv);
+  const withColor = parts.every((g) => g.attributes.color);
   const pos = new Float32Array(count * 3);
   const nor = new Float32Array(count * 3);
   const uv = withUv ? new Float32Array(count * 2) : null;
+  const col = withColor ? new Float32Array(count * 3) : null;
   let o = 0;
   for (const g of parts) {
     pos.set(g.attributes.position.array, o * 3);
     nor.set(g.attributes.normal.array, o * 3);
     if (uv) uv.set(g.attributes.uv.array, o * 2);
+    if (col) col.set(g.attributes.color.array, o * 3);
     o += g.attributes.position.count;
   }
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   if (uv) out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  if (col) out.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return out;
 }
 
+// Four tiers, each darker underneath where the tier above shades it.
 function pineFoliage() {
-  return merge([
-    new THREE.ConeGeometry(2.3, 3.4, 8).translate(0, 3.3, 0),
-    new THREE.ConeGeometry(1.8, 3.0, 8).translate(0, 5.0, 0),
-    new THREE.ConeGeometry(1.2, 2.6, 8).translate(0, 6.6, 0),
-  ]);
+  return merge(
+    [
+      [2.4, 3.2, 3.1],
+      [1.95, 2.9, 4.6],
+      [1.5, 2.6, 6.0],
+      [1.0, 2.2, 7.3],
+    ].map(([r, h, y]) => shadeByHeight(new THREE.ConeGeometry(r, h, 10).translate(0, y, 0), y - h / 2, y + h / 2, 0.5)),
+  );
 }
 
-function leafyFoliage() {
+// blobs: 8 for trees up close, fewer (and bigger) for far-off ones nobody sees in detail.
+export function leafyFoliage(blobs = 8) {
   const blob = (r, x, y, z) => new THREE.IcosahedronGeometry(r, 1).translate(x, y, z);
-  return merge([blob(2.2, 0, 4.8, 0), blob(1.6, 1.3, 4.2, 0.5), blob(1.7, -1.2, 4.4, -0.5), blob(1.5, 0.2, 5.9, -0.2), blob(1.4, -0.3, 4.0, 1.2)]);
+  const all = [
+    blob(2.0, 0, 4.9, 0),
+    blob(1.5, 1.4, 4.3, 0.5),
+    blob(1.6, -1.3, 4.5, -0.5),
+    blob(1.4, 0.3, 6.0, -0.2),
+    blob(1.3, -0.4, 4.0, 1.3),
+    blob(1.2, 0.6, 4.1, -1.3),
+    blob(1.1, -0.9, 5.7, 0.7),
+    blob(1.0, 1.1, 5.6, 0.9),
+  ];
+  const crown = blobs >= all.length ? merge(all) : merge(all.slice(0, blobs).map((b, k) => (k ? b.scale(1.15, 1.15, 1.15) : b)));
+  return shadeByHeight(crown, 2.8, 6.6, 0.5);
+}
+
+// A slim white trunk with dark marks, and a tall oval crown.
+function birchTrunk() {
+  const geo = new THREE.CylinderGeometry(0.16, 0.24, 4.2, 7, 6).translate(0, 2.1, 0);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let k = 0; k < pos.count; k++) {
+    const mark = noise(pos.getY(k) * 3.1, Math.atan2(pos.getZ(k), pos.getX(k)) * 2) > 0.72 ? 0.25 : 0.95;
+    colors.set([mark, mark, mark * 0.97], k * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
+
+function birchFoliage() {
+  const blob = (r, x, y, z) => new THREE.IcosahedronGeometry(r, 1).scale(1, 1.4, 1).translate(x, y, z);
+  return shadeByHeight(merge([blob(1.3, 0, 5.2, 0), blob(1.0, 0.6, 4.4, 0.3), blob(1.0, -0.5, 4.6, -0.3), blob(0.9, 0.1, 6.4, 0.1)]), 3.4, 7, 0.55);
+}
+
+// Three crossed cards for a clump of grass blades, standing on the ground (each card twice, back
+// to back, since a two-sided material would light the back faces from below). Normals point up so
+// the clump is lit like the ground it grows from, whichever way it faces.
+function grassClumpGeometry() {
+  const cards = [0, 1, 2, 3, 4, 5].map((k) => new THREE.PlaneGeometry(0.9, 0.6).translate(0, 0.3, 0).rotateY((k * Math.PI) / 3));
+  const geo = merge(cards);
+  const nor = geo.attributes.normal;
+  for (let k = 0; k < nor.count; k++) nor.setXYZ(k, 0, 1, 0);
+  return geo;
+}
+
+// Five petals round a yellow middle (petals are white, so the instance color tints them).
+function flowerGeometry() {
+  const parts = [];
+  for (let k = 0; k < 5; k++) {
+    const a = (k / 5) * Math.PI * 2;
+    parts.push(new THREE.SphereGeometry(0.09, 4, 2).scale(1, 0.35, 0.6).translate(0.1, 0, 0).rotateY(a).translate(0, 0.33, 0));
+  }
+  for (const p of parts) shadeByHeight(p, 0, 1, 1);
+  const middle = new THREE.SphereGeometry(0.06, 5, 3).translate(0, 0.35, 0);
+  const mc = new Float32Array(middle.attributes.position.count * 3);
+  for (let k = 0; k < mc.length; k += 3) mc.set([1, 0.82, 0.25], k);
+  middle.setAttribute('color', new THREE.BufferAttribute(mc, 3));
+  return merge([...parts, middle]);
+}
+
+// Blades of grass on a see-through card: dark at the root, lighter at the tips.
+let bladeTexture = null;
+export function grassBladeTexture() {
+  if (bladeTexture) return bladeTexture;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 96;
+  const g = c.getContext('2d');
+  const rand = mulberry32(31);
+  for (let i = 0; i < 34; i++) {
+    const x = 8 + rand() * 112;
+    const h = 40 + rand() * 54;
+    const lean = (rand() - 0.5) * 30;
+    const grad = g.createLinearGradient(0, 96, 0, 96 - h);
+    grad.addColorStop(0, '#3d6e22');
+    grad.addColorStop(1, rand() < 0.5 ? '#b5e07a' : '#9fd060');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(x - 2.5, 96);
+    g.quadraticCurveTo(x + lean * 0.3, 96 - h * 0.6, x + lean, 96 - h);
+    g.quadraticCurveTo(x + lean * 0.3 + 1, 96 - h * 0.6, x + 2.5, 96);
+    g.fill();
+  }
+  bladeTexture = new THREE.CanvasTexture(c);
+  bladeTexture.colorSpace = THREE.SRGBColorSpace;
+  return bladeTexture;
 }
 
 // The rest of the planet: a big curved cap of land, sea and clouds under the park, only really

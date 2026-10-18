@@ -8,7 +8,7 @@ import { makeSlideWorld } from './slide-world.js';
 import { makeBeachStaticWorld } from './tropical.js';
 import { makeSeatCar, makeTrainCar, makeRider, makeHands, makeRaft, makeSeatRaft, FRIENDS, FRIEND_SEAT, FRIEND_RAFT, RING_Z } from './characters.js';
 import { Effects, makeStreaks, makeSprayTrail } from './effects.js';
-import { makeSky, SUN_DIR, EARTH_R } from './nature.js';
+import { makeSky, SUN_DIR, EARTH_R, WIND } from './nature.js';
 import { quality, stepDown, FrameWatch } from './quality.js';
 
 const EYE = 1.3; // seat height above the track
@@ -134,12 +134,20 @@ export class Ride {
     const q = quality();
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.pixelRatio));
     this.sun.castShadow = q.shadows > 0;
+    this.syncBlobShadows();
     if (q.shadows && this.sun.shadow.mapSize.x !== q.shadows) {
       this.sun.shadow.map?.dispose();
       this.sun.shadow.map = null;
       this.sun.shadow.mapSize.set(q.shadows, q.shadows);
     }
     this.resize();
+  }
+
+  // Soft blob shadows under trees stand in for real ones when those are off.
+  syncBlobShadows() {
+    this.world?.group.traverse((o) => {
+      if (o.userData.blobShadow) o.visible = !this.sun.castShadow;
+    });
   }
 
   // The sky reflected in steel, fiberglass and water: rendered once per game into an environment map.
@@ -181,6 +189,7 @@ export class Ride {
       this.world = this.slide ? makeSlideWorld(track, RAFT_EYE) : makeTrackWorld(track, EYE);
       shadowFlags(this.world.group);
       this.scene.add(this.world.group);
+      this.syncBlobShadows();
       this.space.place(track.pos[(track.count >> 1) * 3]);
     }
     if (this.slide && !this.statics.slide) {
@@ -338,6 +347,7 @@ export class Ride {
     this.friend.update(dt, handsUp || this.cheer > 0 ? 1 : 0, speed01);
 
     for (const p of this.world.pickups) if (p.holder.visible) p.spin.rotation.y += dt * (p.spinRate ?? 3);
+    WIND.value = this.time;
     this.world.update?.(dt, this.time);
     this.effects.update(dt);
     if (this.finished) this.dusk = Math.min(1, this.dusk + dt * 0.5);

@@ -2,8 +2,9 @@
 // palm trees, beach things, other islands (one is a smoking volcano), sailboats and gulls.
 // Built like nature.js: everything that repeats is instanced so it stays fast on an iPad.
 import * as THREE from 'three';
-import { EARTH_R, fbm, smoothstep, mulberry32, merge, makeClouds, makeEarth } from './nature.js';
+import { EARTH_R, fbm, smoothstep, mulberry32, merge, makeClouds, makeEarth, windy, detailMap, shadeByHeight, leafyFoliage } from './nature.js';
 import { makeWater } from './water.js';
+import { rippleNormalTexture, glowTexture } from './textures.js';
 
 export const SEA_LEVEL = -1.5;
 
@@ -82,6 +83,29 @@ export function getWaveTexture() {
   return waveTexture;
 }
 
+// A soft puff of smoke for the volcano.
+let smokeTex = null;
+function smokeTexture() {
+  if (smokeTex) return smokeTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const rand = mulberry32(9);
+  for (let i = 0; i < 9; i++) {
+    const x = 34 + rand() * 60;
+    const y = 34 + rand() * 60;
+    const r = 22 + rand() * 20;
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(255,255,255,0.55)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+  }
+  smokeTex = new THREE.CanvasTexture(c);
+  smokeTex.colorSpace = THREE.SRGBColorSpace;
+  return smokeTex;
+}
+
 // --- Shapes ---------------------------------------------------------------------------------
 
 // A palm trunk leaning over in a gentle curve, with rings, plus where its top ends up.
@@ -104,6 +128,25 @@ function palmTrunk() {
   return { geo: merge(parts), top: new THREE.Vector3(x, y, 0) };
 }
 const TRUNK = palmTrunk();
+
+// Rings round a palm trunk (each trunk segment's v runs 0..1, so they repeat per segment).
+let ringTexture = null;
+function getRingTexture() {
+  if (ringTexture) return ringTexture;
+  const c = document.createElement('canvas');
+  c.width = 16;
+  c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 64);
+  for (const [at, col] of [[0, '#7a5534'], [0.12, '#b88a5a'], [0.45, '#c79a68'], [0.85, '#a87a4c'], [1, '#6e4a2c']]) grad.addColorStop(at, col);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 16, 64);
+  ringTexture = new THREE.CanvasTexture(c);
+  ringTexture.wrapS = ringTexture.wrapT = THREE.RepeatWrapping;
+  ringTexture.repeat.set(1, 3);
+  ringTexture.colorSpace = THREE.SRGBColorSpace;
+  return ringTexture;
+}
 
 // Fronds: long drooping leaves fanned out around the top of the trunk.
 function palmFronds() {
@@ -130,6 +173,14 @@ function palmFronds() {
     leaves.push(geo);
   }
   const fronds = merge(leaves);
+  // Darker near the crown, sunny yellow-green out at the tips.
+  const pos = fronds.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let k = 0; k < pos.count; k++) {
+    const t = smoothstep(0.3, 3.2, Math.hypot(pos.getX(k), pos.getZ(k)));
+    colors.set([0.62 + t * 0.5, 0.7 + t * 0.32, 0.6 + t * 0.05], k * 3);
+  }
+  fronds.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   fronds.translate(TRUNK.top.x, TRUNK.top.y, TRUNK.top.z);
   return fronds;
 }
@@ -341,7 +392,10 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
   const tex = getSandTexture().clone();
   tex.needsUpdate = true;
   tex.repeat.set(size / 9, size / 9);
-  g.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: tex, vertexColors: true })));
+  const ripples = rippleNormalTexture().clone();
+  ripples.needsUpdate = true;
+  ripples.repeat.set(size / 3, size / 3);
+  g.add(new THREE.Mesh(geo, detailMap(new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, normalMap: ripples, normalScale: new THREE.Vector2(0.25, 0.25) }))));
   g.add(makeEarth(center, 'beach'));
 
   // The sea: turquoise over the sand, deep blue further out, with moving wave glints.
@@ -404,12 +458,15 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
     const lava = new THREE.Mesh(new THREE.CircleGeometry(26, 20), new THREE.MeshBasicMaterial({ color: '#ff7a2a' }));
     lava.rotation.x = -Math.PI / 2;
     lava.position.set(volcano.x, vy + 206, volcano.z);
-    g.add(mountain, crater, lava);
-    const puff = new THREE.IcosahedronGeometry(1, 1);
-    for (let k = 0; k < 14; k++) {
-      const mesh = new THREE.Mesh(puff, new THREE.MeshLambertMaterial({ color: '#c9c4c0', emissive: '#555050', transparent: true, opacity: 0.8, depthWrite: false }));
+    const lavaGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: '#ff8a3a', blending: THREE.AdditiveBlending, transparent: true, opacity: 0.8, depthWrite: false }));
+    lavaGlow.scale.setScalar(160);
+    lavaGlow.position.set(volcano.x, vy + 215, volcano.z);
+    g.add(mountain, crater, lava, lavaGlow);
+    for (let k = 0; k < 18; k++) {
+      const mesh = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTexture(), color: '#d6d0cb', transparent: true, opacity: 0.8, depthWrite: false }));
+      mesh.material.rotation = rand() * Math.PI * 2;
       g.add(mesh);
-      smoke.push({ mesh, age: (k / 14) * 12, base: new THREE.Vector3(volcano.x, vy + 215, volcano.z), drift: rand() * Math.PI * 2 });
+      smoke.push({ mesh, age: (k / 18) * 12, base: new THREE.Vector3(volcano.x, vy + 215, volcano.z), drift: rand() * Math.PI * 2 });
     }
   }
 
@@ -439,15 +496,26 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
     t.y = ground(t.x, t.z);
     t.turn = rand() * Math.PI * 2;
   }
-  const trunkMesh = new THREE.InstancedMesh(TRUNK.geo, new THREE.MeshLambertMaterial({ color: '#a77b4f' }), palms.length);
-  const frondMesh = new THREE.InstancedMesh(palmFronds(), new THREE.MeshLambertMaterial({ color: '#ffffff', side: THREE.DoubleSide }), palms.length);
-  const nutMesh = new THREE.InstancedMesh(coconuts(), new THREE.MeshLambertMaterial({ color: '#6b4a2a' }), palms.length);
+  const trunkMat = new THREE.MeshLambertMaterial({ color: '#ffffff', map: getRingTexture() });
+  const frondMat = windy(new THREE.MeshLambertMaterial({ color: '#ffffff', side: THREE.DoubleSide, vertexColors: true }), 0.03);
+  const nutMat = new THREE.MeshLambertMaterial({ color: '#6b4a2a' });
   const frondGreens = ['#2f9a44', '#3fae4a', '#26883c', '#4fb64f'].map((col) => new THREE.Color(col));
-  palms.forEach((t, k) => {
-    for (const mesh of [trunkMesh, frondMesh, nutMesh]) place(mesh, k, t.x, t.y, t.z, t.scale, t.scale, t.turn);
-    frondMesh.setColorAt(k, frondGreens[k % frondGreens.length]);
-  });
-  g.add(trunkMesh, frondMesh, nutMesh);
+  const frondGeo = palmFronds();
+  const nutGeo = coconuts();
+  // Near palms cast real shadows; the far ones (hundreds of them) don't.
+  for (const near of [true, false]) {
+    const list = palms.filter((t) => t.near === near);
+    if (!list.length) continue;
+    const trunkMesh = new THREE.InstancedMesh(TRUNK.geo, trunkMat, list.length);
+    const frondMesh = new THREE.InstancedMesh(frondGeo, frondMat, list.length);
+    const nutMesh = new THREE.InstancedMesh(nutGeo, nutMat, list.length);
+    list.forEach((t, k) => {
+      for (const mesh of [trunkMesh, frondMesh, nutMesh]) place(mesh, k, t.x, t.y, t.z, t.scale, t.scale, t.turn);
+      frondMesh.setColorAt(k, frondGreens[k % frondGreens.length]);
+    });
+    if (!near) trunkMesh.userData.noShadow = frondMesh.userData.noShadow = nutMesh.userData.noShadow = true;
+    g.add(trunkMesh, frondMesh, nutMesh);
+  }
   const nearPalms = palms.filter((t) => t.near);
   const shadows = new THREE.InstancedMesh(
     new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2),
@@ -459,7 +527,30 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
     const dz = Math.sin(-t.turn) * PALM_LEAN * t.scale * 2.5;
     place(shadows, k, t.x + dx, t.y + 0.06, t.z + dz, t.scale * 2.4, 1);
   });
+  shadows.userData.blobShadow = true;
   g.add(shadows);
+
+  // Jungle on the green hills: dense round crowns crowding together.
+  const canopy = [];
+  for (let k = 0; canopy.length < 300 && k < 9000; k++) {
+    const a = rand() * Math.PI * 2;
+    const r = 120 + rand() * 700;
+    const x = center.x + Math.cos(a) * (r + (bounds.max.x - bounds.min.x) / 2);
+    const z = center.z + Math.sin(a) * (r + (bounds.max.z - bounds.min.z) / 2);
+    const above = ground(x, z) + curve(x, z) - SEA_LEVEL;
+    if (above > 9 && boxDist(x, z) > 100) canopy.push({ x, z, y: ground(x, z) });
+  }
+  if (canopy.length) {
+    const crowns = new THREE.InstancedMesh(leafyFoliage(4), windy(new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true, vertexColors: true }), 0.01), canopy.length);
+    const jungleGreens = ['#2f7a34', '#3f9a3e', '#276b2e', '#4aa548'].map((col) => new THREE.Color(col));
+    canopy.forEach((t, k) => {
+      const sc = 1.6 + rand() * 1.4;
+      place(crowns, k, t.x, t.y - 3 * sc, t.z, sc * 1.3, sc);
+      crowns.setColorAt(k, jungleGreens[k % jungleGreens.length]);
+    });
+    crowns.userData.noShadow = true;
+    g.add(crowns);
+  }
 
   // Close to the slide: bushes and flowers, and beach things to whizz past.
   const scatter = (count, minD, maxD, sandy = false) => {
@@ -473,10 +564,10 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
     }
     return out;
   };
-  const leaves = new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true });
+  const leaves = windy(new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true, vertexColors: true }), 0.02);
   const bushGreens = ['#3f9a3e', '#58b048', '#2f7a34', '#6cc04f'].map((col) => new THREE.Color(col));
   const bushes = scatter(260, 5, 45);
-  const bushMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), leaves, bushes.length);
+  const bushMesh = new THREE.InstancedMesh(shadeByHeight(new THREE.IcosahedronGeometry(1, 1), -0.8, 0.9, 0.55), leaves, bushes.length);
   bushes.forEach((b, k) => {
     const sc = 0.7 + rand() * 1.1;
     place(bushMesh, k, b.x, b.y + sc * 0.4, b.z, sc, sc * 0.7);
@@ -600,7 +691,7 @@ export function makeBeachLandscape(bounds, keepOut, nearTrack) {
         puff.age = (puff.age + dt) % 12;
         const t = puff.age / 12;
         puff.mesh.position.copy(puff.base).add(new THREE.Vector3(Math.cos(puff.drift) * t * 60 + t * 80, t * 160, Math.sin(puff.drift) * t * 60));
-        puff.mesh.scale.setScalar(12 + t * 45);
+        puff.mesh.scale.setScalar(30 + t * 110);
         puff.mesh.material.opacity = 0.75 * (1 - t) * Math.min(1, t * 8);
       }
     },
