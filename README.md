@@ -68,7 +68,9 @@ npm test             # track and slide math tests (node --test)
 ```
 
 To try it on the iPad from your laptop, open `http://<laptop-ip>:8888` on the same Wi-Fi.
-Add `?fast=4` to the URL to speed up the ride while testing.
+Add `?fast=4` to the URL to speed up the ride while testing, and `?q=high`, `?q=medium` or `?q=low` to force a graphics quality tier.
+
+Graphics quality picks itself: rides start at the best tier (real sun shadows, glossy clear-coat paint, full grass) and step down one notch whenever frames stay slow for a couple of seconds, remembering that for next time, so an older iPad stays smooth.
 
 ## How it works
 
@@ -79,6 +81,9 @@ Add `?fast=4` to the URL to speed up the ride while testing.
 - `js/scenery.js`: the 3D world (painted track, tunnels, pond, stars, trees).
 - `js/slide-world.js`: the water slide's 3D pieces (trough, tubes, bowls, tower, pool, caves, ducks); `js/tropical.js` the island around it.
 - `js/characters.js`: the train cars, him, and the animal friends.
-- `js/effects.js`: particles for sparkles, splashes and fireworks.
+- `js/effects.js`: particles for sparkles, splashes, mist and fireworks.
+- `js/quality.js`: the graphics quality tiers and the frame-time watcher that steps them down.
+- `js/textures.js`: procedural textures (concrete, planks, grating, stone, pool tiles, caustics, ripples, glow), drawn on canvases and built ahead of the first ride.
+- `js/water.js`: the one water material (drifting ripples reflecting the sky) used by every pool, pond, the sea and the slide.
 - `js/sound.js`: every sound is synthesized with Web Audio (no audio files).
 - `vendor/three.module.min.js`: Three.js r169, vendored so it works offline.

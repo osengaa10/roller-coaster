@@ -250,15 +250,22 @@ export class Ride {
     this.camUp.set(0, 1, 0);
     this.applyMode(true);
     this.running = true;
-    this.last = performance.now();
-    if (this.slide) {
-      sound.whistle();
-      sound.waterStart();
-    } else {
-      sound.bell();
-      sound.windStart();
-    }
-    requestAnimationFrame(this.loop);
+    // Compile every shader the ride needs before its clock starts, so the stall (if any) happens
+    // sitting in the station, not on the first drop. A newer start() supersedes this one.
+    const token = (this.startToken = (this.startToken || 0) + 1);
+    const go = () => {
+      if (token !== this.startToken || !this.running) return;
+      this.last = performance.now();
+      if (this.slide) {
+        sound.whistle();
+        sound.waterStart();
+      } else {
+        sound.bell();
+        sound.windStart();
+      }
+      requestAnimationFrame(this.loop);
+    };
+    this.renderer.compileAsync(this.scene, this.camera).then(go, go);
   }
 
   stop() {

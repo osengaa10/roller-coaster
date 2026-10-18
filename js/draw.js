@@ -412,16 +412,21 @@ export class DrawPad {
       ctx.stroke();
     }
     if (slide) beach.paintSea(this, groundAt, z);
+    else this.paintHills(groundAt, z, space);
     edge();
     ctx.lineTo(w, h);
     ctx.lineTo(0, h);
     ctx.closePath();
-    ctx.fillStyle = slide ? '#f2d49b' : '#5cc94f';
+    const soil = ctx.createLinearGradient(0, groundY, 0, h);
+    soil.addColorStop(0, slide ? '#f6dca6' : '#62cc54');
+    soil.addColorStop(1, slide ? '#e6c083' : '#3f9e38');
+    ctx.fillStyle = soil;
     ctx.fill();
     edge();
     ctx.strokeStyle = slide ? '#e3bd78' : '#4bb33f';
     ctx.lineWidth = 8;
     ctx.stroke();
+    this.paintGroundDetail(groundAt, z, slide);
 
     if (slide) {
       beach.paintSand(this, groundAt, z);
@@ -437,6 +442,7 @@ export class DrawPad {
     const { ctx, w, h } = this;
     const sx = w * 0.5;
     const sy = h * 0.15;
+    sunGlow(ctx, sx, sy, z);
     ctx.fillStyle = '#ffe14d';
     ctx.strokeStyle = '#ffe14d';
     ctx.lineWidth = 5 * z;
@@ -453,9 +459,73 @@ export class DrawPad {
     ctx.fill();
 
     // Clouds belong low in the sky, so they fade away as space comes into view.
-    ctx.fillStyle = `rgba(255,255,255,${0.9 * (1 - space)})`;
     for (const [cx, cy, s] of [[0.18, 0.22, 1], [0.78, 0.3, 1.3], [0.35, 0.45, 0.8]]) {
-      cloud(ctx, cx * w, cy * h, s * z);
+      cloud(ctx, cx * w, cy * h, s * z, 0.9 * (1 - space));
+    }
+  }
+
+  // Rolling hills far away, pale with haze, scrolling slower than the drawing.
+  paintHills(groundAt, z, space) {
+    const { ctx, w } = this;
+    if (space >= 1) return;
+    const shift = this.panX * this.unit * 0.3;
+    for (const [height, color, freq, seed] of [[46, `rgba(150,200,170,${0.8 * (1 - space)})`, 0.006, 1.7], [28, `rgba(110,185,120,${0.9 * (1 - space)})`, 0.011, 4.1]]) {
+      ctx.beginPath();
+      for (let sx = 0; sx <= w + 8; sx += 8) {
+        const t = (sx + shift) * freq;
+        const bump = 0.55 + 0.3 * Math.sin(t + seed) + 0.15 * Math.sin(t * 2.3 + seed * 3);
+        ctx.lineTo(sx, groundAt(sx) - height * z * bump);
+      }
+      for (let sx = w + 8; sx >= 0; sx -= 8) ctx.lineTo(sx, groundAt(sx) + 2);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  }
+
+  // Grass tufts and flowers (or, on the beach, specks and pebbles) just below the ground line.
+  // They sit at fixed places in the drawing, so they scroll with it.
+  paintGroundDetail(groundAt, z, slide) {
+    const { ctx, w, h, unit, panX } = this;
+    const step = Math.max(0.035, 18 / unit);
+    const first = Math.floor(panX / step);
+    const last = Math.ceil((panX + (w - this.left) / unit) / step);
+    const hash = (n) => {
+      const x = Math.sin(n * 127.1) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    ctx.lineCap = 'round';
+    for (let i = first; i <= last; i++) {
+      const sx = this.left + (i * step - panX) * unit + (hash(i) - 0.5) * step * unit;
+      const top = groundAt(sx);
+      const y = top + 6 + hash(i + 0.5) * Math.max(0, h - top - 12) * 0.85;
+      const r = hash(i + 0.25);
+      if (slide) {
+        ctx.fillStyle = r < 0.7 ? 'rgba(190,140,80,0.45)' : 'rgba(255,255,255,0.7)';
+        ctx.beginPath();
+        ctx.arc(sx, y, (r < 0.7 ? 1.5 : 2.5) * z, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      if (r < 0.75) {
+        ctx.strokeStyle = r < 0.4 ? '#3f9e35' : '#7ad35e';
+        ctx.lineWidth = 2 * z;
+        ctx.beginPath();
+        for (const lean of [-0.5, 0, 0.45]) {
+          ctx.moveTo(sx + lean * 3 * z, y);
+          ctx.lineTo(sx + lean * 7 * z, y - (7 + Math.abs(lean) * -3) * z);
+        }
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = ['#ff5d73', '#ffd23f', '#ffffff', '#b388ff'][Math.floor(hash(i + 0.75) * 4)];
+        ctx.beginPath();
+        ctx.arc(sx, y - 3 * z, 3 * z, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffb000';
+        ctx.beginPath();
+        ctx.arc(sx, y - 3 * z, 1.2 * z, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
@@ -533,6 +603,14 @@ export class DrawPad {
 
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
+    // A soft shadow under the track, as if the sun were up and to the left.
+    ctx.save();
+    ctx.translate(3 * k, 6 * k);
+    path();
+    ctx.strokeStyle = 'rgba(20,40,60,0.13)';
+    ctx.lineWidth = Math.max(8, 22 * k);
+    ctx.stroke();
+    ctx.restore();
     // Ties
     path();
     ctx.setLineDash([Math.max(2, 6 * k), Math.max(3, 8 * k)]);
@@ -587,9 +665,29 @@ export class DrawPad {
     ctx.lineTo(b.x + 10 * k, a.y - 66 * k);
     ctx.closePath();
     ctx.fill();
-    // Platform
+    // Shingle lines across the roof, clipped to it.
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(160,70,20,0.35)';
+    ctx.lineWidth = Math.max(1, 2 * k);
+    ctx.beginPath();
+    for (let y = a.y - 96 * k; y < a.y - 66 * k; y += 8 * k) {
+      ctx.moveTo(a.x - 12 * k, y);
+      ctx.lineTo(b.x + 12 * k, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+    // Platform, with planks.
     ctx.fillStyle = '#d9a066';
     ctx.fillRect(a.x - 6 * k, a.y + 10 * k, len + 12 * k, this.groundY - a.y - 10 * k);
+    ctx.strokeStyle = 'rgba(120,70,30,0.35)';
+    ctx.lineWidth = Math.max(1, 1.5 * k);
+    ctx.beginPath();
+    for (let y = a.y + 16 * k; y < this.groundY; y += 7 * k) {
+      ctx.moveTo(a.x - 6 * k, y);
+      ctx.lineTo(b.x + 6 * k, y);
+    }
+    ctx.stroke();
 
     // Little train waiting at the station
     const colors = ['#ffd23f', '#3bceac', '#ee4266'];
@@ -625,12 +723,28 @@ export class DrawPad {
   }
 }
 
-export function cloud(ctx, x, y, s) {
-  ctx.beginPath();
-  ctx.arc(x, y, 26 * s, 0, Math.PI * 2);
-  ctx.arc(x + 30 * s, y - 12 * s, 32 * s, 0, Math.PI * 2);
-  ctx.arc(x + 62 * s, y, 24 * s, 0, Math.PI * 2);
-  ctx.fill();
+// A puffy cloud: a blue-grey underside peeking out below the white top.
+export function cloud(ctx, x, y, s, alpha = 1) {
+  const puffs = (dy) => {
+    ctx.beginPath();
+    ctx.arc(x, y + dy, 26 * s, 0, Math.PI * 2);
+    ctx.arc(x + 30 * s, y - 12 * s + dy, 32 * s, 0, Math.PI * 2);
+    ctx.arc(x + 62 * s, y + dy, 24 * s, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  ctx.fillStyle = `rgba(196,212,234,${alpha})`;
+  puffs(5 * s);
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+  puffs(0);
+}
+
+// Warm light glowing round the sun.
+export function sunGlow(ctx, x, y, z) {
+  const glow = ctx.createRadialGradient(x, y, 30 * z, x, y, 150 * z);
+  glow.addColorStop(0, 'rgba(255,244,190,0.55)');
+  glow.addColorStop(1, 'rgba(255,244,190,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(x - 150 * z, y - 150 * z, 300 * z, 300 * z);
 }
 
 export function roundRect(ctx, x, y, w, h, r) {

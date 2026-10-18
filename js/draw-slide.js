@@ -1,7 +1,7 @@
 // The water slide's drawing screen: a beach with the sea behind, a slide tower, the slide itself
 // (tight circles shown as toilet bowls) and a peek at the splash pool at the end.
 import { cssColor, stationFor } from './track.js';
-import { cloud } from './draw.js';
+import { cloud, sunGlow } from './draw.js';
 
 const SUPPORT_TOP = 7.5; // normalized, same as the coaster: no poles drawn above this
 
@@ -10,6 +10,7 @@ export function paintSky(pad, z, space) {
   const { ctx, w, h } = pad;
   const sx = w * 0.5;
   const sy = h * 0.15;
+  sunGlow(ctx, sx, sy, z);
   ctx.fillStyle = '#ffd93d';
   ctx.strokeStyle = '#ffd93d';
   ctx.lineWidth = 6 * z;
@@ -51,8 +52,7 @@ export function paintSky(pad, z, space) {
   ctx.stroke();
 
   // Clouds and gulls belong low in the sky, so they fade away as space comes into view.
-  ctx.fillStyle = `rgba(255,255,255,${0.95 * (1 - space)})`;
-  for (const [cx, cy, s] of [[0.12, 0.2, 1.1], [0.74, 0.26, 1.4], [0.3, 0.42, 0.75]]) cloud(ctx, cx * w, cy * h, s * z);
+  for (const [cx, cy, s] of [[0.12, 0.2, 1.1], [0.74, 0.26, 1.4], [0.3, 0.42, 0.75]]) cloud(ctx, cx * w, cy * h, s * z, 0.95 * (1 - space));
   ctx.strokeStyle = `rgba(60,60,70,${0.8 * (1 - space)})`;
   ctx.lineWidth = 3 * z;
   for (const [gx, gy, s] of [[0.62, 0.12, 1], [0.67, 0.16, 0.8], [0.88, 0.1, 0.9], [0.4, 0.3, 0.7]]) {
@@ -89,6 +89,14 @@ export function paintSea(pad, groundAt, z) {
   ctx.ellipse(ix, iy, 70 * z, 22 * z, 0, Math.PI, 0);
   ctx.fill();
   palm(ctx, ix + 14 * z, iy - 16 * z, 0.55 * z, '#2f8a48', '#8a5a3c');
+
+  // Sun glints dancing on the water.
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  for (let i = 0; i < 26; i++) {
+    const gx = ((Math.sin(i * 91.7) * 0.5 + 0.5) * w) | 0;
+    const gy = top(gx) + (4 + ((i * 37) % 22)) * z;
+    ctx.fillRect(gx, gy, (4 + (i % 4) * 3) * z, 1.6 * z);
+  }
 
   // Wave scallops and sparkles.
   ctx.strokeStyle = 'rgba(255,255,255,0.75)';
@@ -127,10 +135,21 @@ function palm(ctx, x, y, s, leaf, bark) {
   ctx.moveTo(x, y);
   ctx.quadraticCurveTo(x - 6 * s, y - 70 * s, x + 18 * s, y - 130 * s);
   ctx.stroke();
+  // Rings up the trunk.
+  ctx.strokeStyle = 'rgba(70,40,20,0.45)';
+  ctx.lineWidth = 1.6 * s;
+  for (let t = 0.08; t < 0.95; t += 0.11) {
+    const px = (1 - t) * (1 - t) * x + 2 * (1 - t) * t * (x - 6 * s) + t * t * (x + 18 * s);
+    const py = (1 - t) * (1 - t) * y + 2 * (1 - t) * t * (y - 70 * s) + t * t * (y - 130 * s);
+    ctx.beginPath();
+    ctx.moveTo(px - 4.5 * s, py);
+    ctx.lineTo(px + 4.5 * s, py - 1.5 * s);
+    ctx.stroke();
+  }
   const tx = x + 18 * s;
   const ty = y - 130 * s;
-  ctx.fillStyle = leaf;
   for (const a of [-2.7, -2.1, -1.4, -0.7, -0.2, 0.35]) {
+    ctx.fillStyle = leaf;
     ctx.beginPath();
     ctx.moveTo(tx, ty);
     const ex = tx + Math.cos(a) * 60 * s;
@@ -138,6 +157,13 @@ function palm(ctx, x, y, s, leaf, bark) {
     ctx.quadraticCurveTo(tx + Math.cos(a) * 40 * s, ty + Math.sin(a) * 40 * s - 12 * s, ex, ey);
     ctx.quadraticCurveTo(tx + Math.cos(a) * 26 * s, ty + Math.sin(a) * 18 * s + 4 * s, tx, ty);
     ctx.fill();
+    // A lighter rib down the middle of each frond.
+    ctx.strokeStyle = 'rgba(200,240,150,0.6)';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.quadraticCurveTo(tx + Math.cos(a) * 34 * s, ty + Math.sin(a) * 30 * s - 4 * s, ex, ey);
+    ctx.stroke();
   }
   ctx.fillStyle = '#7a4a2a';
   for (const [dx, dy] of [[-4, 6], [5, 7]]) {
