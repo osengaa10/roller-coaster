@@ -198,24 +198,34 @@ function boulderGeometry() {
 
 function duckGeometry() {
   const g = new THREE.Group();
-  const yellow = mat('#ffd23f', { emissive: '#6a5200' });
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), yellow);
+  // Glossy squeaky rubber.
+  const yellow = new THREE.MeshStandardMaterial({ color: '#ffd23f', emissive: '#4a3600', roughness: 0.32 });
+  const orange = new THREE.MeshStandardMaterial({ color: '#ff8c42', emissive: '#3a1800', roughness: 0.35 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 28, 18), yellow);
   body.scale.set(1, 0.75, 1.25);
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.3, 8), yellow);
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.3, 12), yellow);
   tail.position.set(0, 0.22, -0.5);
   tail.rotation.x = -0.9;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12), yellow);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 24, 16), yellow);
   head.position.set(0, 0.48, 0.28);
-  const beak = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), mat('#ff8c42', { emissive: '#552200' }));
-  beak.scale.set(1.2, 0.45, 1.3);
-  beak.position.set(0, 0.42, 0.55);
-  g.add(body, tail, head, beak);
+  // Beak in two halves, a little open, like he's quacking.
+  const top = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 10), orange);
+  top.scale.set(1.2, 0.35, 1.35);
+  top.position.set(0, 0.44, 0.55);
+  const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 10), orange);
+  bottom.scale.set(1.05, 0.25, 1.15);
+  bottom.position.set(0, 0.39, 0.52);
+  g.add(body, tail, head, top, bottom);
   for (const s of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), mat('#111111'));
+    const wing = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10), yellow);
+    wing.scale.set(0.35, 0.6, 1.1);
+    wing.position.set(s * 0.37, 0.1, -0.05);
+    wing.rotation.x = -0.3;
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 8), new THREE.MeshStandardMaterial({ color: '#111111', roughness: 0.1 }));
     eye.position.set(s * 0.12, 0.56, 0.49);
     const shine = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
     shine.position.set(s * 0.12 + 0.015, 0.575, 0.535);
-    g.add(eye, shine);
+    g.add(wing, eye, shine);
   }
   return g;
 }

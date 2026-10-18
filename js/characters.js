@@ -3,12 +3,26 @@ import * as THREE from 'three';
 import { quality } from './quality.js';
 import { numberTexture } from './textures.js';
 
+// Soft, slightly fuzzy material for skin, fur and clothes: a gentle light round the edges (rim
+// light) makes the riders stand out against the busy world behind them.
 const mats = new Map();
-export const mat = (color) => {
-  if (!mats.has(color)) mats.set(color, new THREE.MeshLambertMaterial({ color }));
-  return mats.get(color);
+export const mat = (color, roughness = 0.72) => {
+  const key = color + roughness;
+  if (!mats.has(key)) {
+    const m = new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
+    m.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <opaque_fragment>',
+        'outgoingLight += vec3(0.32, 0.31, 0.3) * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);\n#include <opaque_fragment>',
+      );
+    };
+    m.customProgramCacheKey = () => 'rim';
+    mats.set(key, m);
+  }
+  return mats.get(key);
 };
-const SPHERE = new THREE.SphereGeometry(1, 16, 12);
+const glossy = new THREE.MeshStandardMaterial({ color: '#141418', roughness: 0.08, metalness: 0 });
+const SPHERE = new THREE.SphereGeometry(1, 32, 24);
 const CYL = new THREE.CylinderGeometry(1, 1, 1, 10);
 const CONE = new THREE.ConeGeometry(1, 1, 8);
 const BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -81,7 +95,48 @@ function bodyGeometry(width) {
   });
   geo.rotateY(-Math.PI / 2); // profile x -> forward (z), extrusion -> across (x)
   geo.translate(width / 2 - bevel, 0, 0);
-  return geo;
+  return smoothNormals(geo, 0.6);
+}
+
+// Extruded shapes come with flat faces, which show as bands on glossy paint. Average the normals
+// of faces meeting at each corner, except across sharp edges (more than `crease` radians).
+function smoothNormals(geo, crease) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const pos = g.attributes.position;
+  const count = pos.count;
+  const faceN = [];
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  for (let f = 0; f < count / 3; f++) {
+    a.fromBufferAttribute(pos, f * 3);
+    b.fromBufferAttribute(pos, f * 3 + 1);
+    c.fromBufferAttribute(pos, f * 3 + 2);
+    faceN.push(new THREE.Vector3().subVectors(c, b).cross(a.clone().sub(b)).normalize());
+  }
+  const groups = new Map();
+  for (let k = 0; k < count; k++) {
+    const key = `${pos.getX(k).toFixed(4)},${pos.getY(k).toFixed(4)},${pos.getZ(k).toFixed(4)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(k);
+  }
+  const normals = new Float32Array(count * 3);
+  const cos = Math.cos(crease);
+  const sum = new THREE.Vector3();
+  for (const list of groups.values()) {
+    for (const k of list) {
+      const own = faceN[Math.floor(k / 3)];
+      sum.set(0, 0, 0);
+      for (const j of list) {
+        const other = faceN[Math.floor(j / 3)];
+        if (own.dot(other) >= cos) sum.add(other);
+      }
+      sum.normalize();
+      normals.set([sum.x, sum.y, sum.z], k * 3);
+    }
+  }
+  g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  return g;
 }
 
 function smallStar() {
@@ -256,68 +311,130 @@ export function makeRider(kind) {
   g.add(head);
   head.add(ball(k.head, [0, 0, 0], 0.28));
 
-  const eyes = (y = 0.05, z = 0.24, x = 0.1) => {
+  // Big glossy eyes with two sparkles each; they close for a blink now and then.
+  const lids = [];
+  const eyes = (y = 0.05, z = 0.24, x = 0.1, r = 0.05) => {
     for (const s of [-1, 1]) {
-      head.add(ball('#111111', [s * x, y, z], 0.045));
-      head.add(ball('#ffffff', [s * x + 0.015, y + 0.018, z + 0.03], 0.014));
+      const eye = new THREE.Group();
+      eye.position.set(s * x, y, z);
+      const pupil = new THREE.Mesh(SPHERE, glossy);
+      pupil.scale.set(r, r * 1.15, r * 0.7);
+      eye.add(pupil, ball('#ffffff', [r * 0.35, r * 0.4, r * 0.55], r * 0.32), ball('#ffffff', [-r * 0.3, -r * 0.35, r * 0.6], r * 0.15));
+      head.add(eye);
+      lids.push(eye);
     }
+  };
+  const cheeks = (y = -0.07, z = 0.2, x = 0.16) => {
+    for (const s of [-1, 1]) head.add(ball('#ff9fb3', [s * x, y, z], 0.05, [1, 0.6, 0.4]));
+  };
+  const smile = (y, z, r = 0.055, color = '#7a2e2e') => {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(r, 0.012, 6, 14, Math.PI), mat(color, 0.5));
+    m.position.set(0, y, z);
+    m.rotation.z = Math.PI; // the arc's ends point up: a smile
+    head.add(m);
   };
   const snout = (r = 0.1) => {
     head.add(ball(k.snout, [0, -0.06, 0.24], r, [1, 0.8, 0.8]));
-    head.add(ball(k.nose || '#111111', [0, -0.03, 0.24 + r * 0.8], 0.035));
+    const nose = new THREE.Mesh(SPHERE, k.nose ? mat(k.nose, 0.3) : glossy);
+    nose.position.set(0, -0.03, 0.24 + r * 0.8);
+    nose.scale.set(0.04, 0.032, 0.03);
+    head.add(nose);
   };
 
   let goggles = null;
   if (kind === 'kid') {
     head.add(ball('#6b3e26', [0, 0.08, -0.02], 0.3, [1, 0.8, 1])); // hair
+    // A few tufts sticking up, and a fringe over the forehead.
+    for (const [x, y, z, r] of [[0.05, 0.3, -0.02, 0.07], [-0.07, 0.29, 0.03, 0.06], [0.0, 0.27, 0.12, 0.06], [0.12, 0.24, 0.08, 0.055]]) head.add(ball('#6b3e26', [x, y, z], r, [1, 1.3, 1]));
     head.add(ball(k.head, [0, -0.01, 0.06], 0.26));
-    eyes(0.02, 0.29, 0.09);
-    head.add(part(SPHERE, '#d9534f', [0, -0.1, 0.27], [0.08, 0.03, 0.03])); // smile
+    head.add(ball('#6b3e26', [0, 0.17, 0.17], 0.13, [1.4, 0.45, 0.7]));
+    eyes(0.02, 0.29, 0.09, 0.048);
+    for (const s of [-1, 1]) {
+      const brow = ball('#5a321e', [s * 0.09, 0.1, 0.3], 1, [0.045, 0.012, 0.012]);
+      brow.rotation.z = -s * 0.15;
+      head.add(brow);
+    }
+    cheeks(-0.06, 0.25, 0.15);
+    smile(-0.08, 0.3, 0.06, '#c0392b');
+    // A star on his T-shirt.
+    const star = new THREE.Mesh(smallStar(), mat('#ffd23f', 0.5));
+    star.position.set(-0.02, 0.32, 0.26);
+    star.scale.setScalar(0.75);
+    g.add(star);
     // Swim goggles pushed up on his forehead, for the water slide.
     goggles = new THREE.Group();
     const strap = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.025, 6, 24), mat('#3a86ff'));
     strap.rotation.x = Math.PI / 2 - 0.35;
     strap.position.y = 0.14;
     goggles.add(strap);
+    const lens = new THREE.MeshStandardMaterial({ color: '#bff7ff', roughness: 0.05, metalness: 0.3 });
     for (const sx of [-1, 1]) {
       goggles.add(ball('#2ec4b6', [sx * 0.09, 0.2, 0.25], 0.07, [1, 0.8, 0.6]));
-      goggles.add(ball('#d8fbff', [sx * 0.09 + 0.02, 0.215, 0.285], 0.025));
+      const glass = new THREE.Mesh(SPHERE, lens);
+      glass.position.set(sx * 0.09, 0.205, 0.275);
+      glass.scale.set(0.05, 0.04, 0.025);
+      goggles.add(glass);
     }
     goggles.visible = false;
     head.add(goggles);
   } else if (kind === 'bear') {
-    for (const s of [-1, 1]) head.add(ball(k.head, [s * 0.2, 0.22, 0], 0.1));
+    for (const s of [-1, 1]) head.add(ball(k.head, [s * 0.2, 0.22, 0], 0.1), ball(k.snout, [s * 0.2, 0.22, 0.05], 0.055, [1, 1, 0.5]));
     eyes();
     snout();
+    cheeks();
+    smile(-0.14, 0.27, 0.04);
   } else if (kind === 'bunny') {
     for (const s of [-1, 1]) {
       const ear = ball(k.head, [s * 0.1, 0.4, -0.02], 1, [0.07, 0.25, 0.05]);
       ear.rotation.z = -s * 0.15;
-      head.add(ear, ball('#ffb6c8', [s * 0.1, 0.4, 0.02], 1, [0.035, 0.18, 0.03]));
+      const inner = ball('#ffb6c8', [s * 0.1, 0.4, 0.02], 1, [0.035, 0.18, 0.03]);
+      inner.rotation.z = -s * 0.15;
+      head.add(ear, inner);
     }
     eyes();
     snout(0.08);
+    cheeks();
+    smile(-0.13, 0.27, 0.035);
+    g.add(ball('#ffffff', [0, 0.12, -0.28], 0.1)); // fluffy tail
   } else if (kind === 'panda') {
     for (const s of [-1, 1]) {
       head.add(ball('#222222', [s * 0.2, 0.22, 0], 0.1));
-      head.add(ball('#222222', [s * 0.1, 0.04, 0.2], 0.075, [1, 1.2, 0.7]));
+      const patch = ball('#222222', [s * 0.1, 0.04, 0.2], 0.075, [1, 1.2, 0.7]);
+      patch.rotation.z = s * 0.4;
+      head.add(patch);
     }
-    eyes(0.05, 0.255);
+    eyes(0.05, 0.255, 0.1, 0.04);
     snout(0.08);
+    cheeks(-0.08, 0.21, 0.17);
+    smile(-0.13, 0.27, 0.035);
   } else if (kind === 'frog') {
     for (const s of [-1, 1]) {
       head.add(ball('#ffffff', [s * 0.13, 0.2, 0.12], 0.1));
-      head.add(ball('#111111', [s * 0.13, 0.21, 0.21], 0.045));
+      const eye = new THREE.Group();
+      eye.position.set(s * 0.13, 0.21, 0.2);
+      const pupil = new THREE.Mesh(SPHERE, glossy);
+      pupil.scale.set(0.05, 0.055, 0.035);
+      eye.add(pupil, ball('#ffffff', [0.015, 0.02, 0.03], 0.014));
+      head.add(eye);
+      lids.push(eye);
     }
     head.add(part(SPHERE, '#c0392b', [0, -0.08, 0.25], [0.15, 0.03, 0.03]));
+    cheeks(-0.04, 0.22, 0.19);
+    // Darker spots on his back and head.
+    for (const [x, y, z, r] of [[0.12, 0.42, -0.18, 0.05], [-0.1, 0.3, -0.24, 0.06], [0.0, 0.5, -0.12, 0.04]]) g.add(ball('#3f9a35', [x, y, z], r, [1, 1, 0.5]));
+    for (const [x, y, z] of [[0.1, 0.12, -0.2], [-0.12, 0.08, -0.21]]) head.add(ball('#3f9a35', [x, y, z], 0.04, [1, 1, 0.5]));
   } else if (kind === 'dino') {
     snout(0.14);
     eyes(0.08, 0.22);
+    cheeks(-0.02, 0.2, 0.18);
     for (const [y, z] of [[0.3, -0.05], [0.22, -0.2], [0.05, -0.3]]) {
       const spike = part(CONE, '#ffd23f', [0, y, z], [0.07, 0.16, 0.07]);
       spike.rotation.x = -0.6;
       head.add(spike);
     }
+    // A lighter belly with stripes across it.
+    g.add(ball(k.snout, [0, 0.27, 0.17], 1, [0.22, 0.25, 0.13]));
+    for (const y of [0.18, 0.27, 0.36]) g.add(ball('#b38ae8', [0, y, 0.285], 1, [0.14, 0.012, 0.02]));
   }
 
   const arms = [-1, 1].map((s) => {
@@ -331,6 +448,7 @@ export function makeRider(kind) {
 
   let raise = 0;
   let time = Math.random() * 10;
+  let nextBlink = 1 + Math.random() * 3;
   return {
     group: g,
     goggles,
@@ -343,6 +461,11 @@ export function makeRider(kind) {
       }
       head.position.y = 0.85 + Math.sin(time * (4 + speed01 * 10)) * 0.02 * (0.3 + speed01);
       head.rotation.z = Math.sin(time * 2.3) * 0.08;
+      // Blink: eyes squash shut for a moment every few seconds.
+      nextBlink -= dt;
+      if (nextBlink < -0.14) nextBlink = 2 + Math.random() * 3.5;
+      const shut = nextBlink < 0 ? 0.12 : 1;
+      for (const lid of lids) lid.scale.y = shut;
     },
   };
 }
