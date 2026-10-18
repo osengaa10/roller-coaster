@@ -23,6 +23,7 @@ const CONFETTI = {
 
 const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(mode), onChange: changed });
 const ride = new Ride($('view'), { onFinish: celebrate, onStar: showStars });
+if (new URLSearchParams(location.search).has('debug')) window.__ride = ride; // for testing
 let track = null;
 
 function changed() {

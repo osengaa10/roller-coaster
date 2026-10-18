@@ -93,6 +93,7 @@ export function makeSky() {
         vec3 glow = vec3(1.0, 0.92, 0.7) * (pow(s, 900.0) * 3.0 + pow(s, 40.0) * 0.35 + pow(s, 6.0) * 0.12);
         c = mix(c + glow, space + glow * 0.6, spaceMix);
         gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
   });
@@ -206,6 +207,7 @@ export function makeClouds() {
     const puffs = 6 + Math.floor(rand() * 5);
     for (let k = 0; k < puffs; k++) {
       const m = new THREE.Mesh(puff, white);
+      m.userData.noShadow = true;
       const r = 7 + rand() * 9;
       m.scale.set(r * 1.2, r * 0.6, r);
       m.position.set((k - puffs / 2) * 8 + rand() * 4, rand() * 5, rand() * 12 - 6);

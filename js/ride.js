@@ -3,12 +3,13 @@
 import * as THREE from 'three';
 import { V_MAX } from './track.js';
 import * as sound from './sound.js';
-import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree } from './scenery.js';
+import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree, shadowFlags } from './scenery.js';
 import { makeSlideWorld } from './slide-world.js';
 import { makeBeachStaticWorld } from './tropical.js';
 import { makeSeatCar, makeTrainCar, makeRider, makeHands, makeRaft, makeSeatRaft, FRIENDS, FRIEND_SEAT, FRIEND_RAFT, RING_Z } from './characters.js';
 import { Effects, makeStreaks, makeSprayTrail } from './effects.js';
 import { makeSky, SUN_DIR, EARTH_R } from './nature.js';
+import { quality, stepDown, FrameWatch } from './quality.js';
 
 const EYE = 1.3; // seat height above the track
 const RAFT_EYE = 0.95; // sitting low in a ring float
@@ -26,6 +27,10 @@ const DUSK_HORIZON = new THREE.Color('#f4a37c');
 const SPACE = new THREE.Color('#060820');
 const SPACE_FROM = 150; // meters: the sky starts getting darker
 const SPACE_TO = 1300; // meters: full outer space (the change is spread out on a log scale)
+const SUN_COLOR = new THREE.Color('#fff1d6');
+const DUSK_SUN = new THREE.Color('#ffb27a');
+const UP = new THREE.Vector3(0, 1, 0);
+const SHADOW_R = 60; // meters: real shadows cover this far around the train
 
 const wrapAngle = (a) => a - Math.PI * 2 * Math.round(a / (Math.PI * 2));
 
@@ -35,7 +40,11 @@ export class Ride {
     this.onStar = onStar;
     // Log depth: the view goes from the lap bar a meter away to the Earth's horizon 60 km off.
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Neutral tone mapping rolls off the bright highlights but keeps his crayon colors saturated.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = quality().softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.frames = new FrameWatch();
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(SKIES.coaster.horizon.clone(), 250, 2600); // haze: far things fade into the sky
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 4000);
@@ -43,13 +52,25 @@ export class Ride {
 
     this.hemi = new THREE.HemisphereLight('#dcefff', '#4a7a3a', 1.2);
     this.scene.add(this.hemi);
-    const sun = new THREE.DirectionalLight('#fff1d6', 2.3);
+    // The sun, with real shadows in a box that follows the train around.
+    const sun = new THREE.DirectionalLight(SUN_COLOR, 2.3);
     sun.position.copy(SUN_DIR).multiplyScalar(300);
-    this.scene.add(sun);
+    const sc = sun.shadow.camera;
+    sc.left = sc.bottom = -SHADOW_R;
+    sc.right = sc.top = SHADOW_R;
+    sc.near = 1;
+    sc.far = 600;
+    sun.shadow.bias = -0.0003;
+    sun.shadow.normalBias = 0.04;
+    this.sun = sun;
+    this.scene.add(sun, sun.target);
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.envMaps = {};
     this.skyDome = makeSky();
     this.scene.add(this.skyDome.mesh);
     // Scenery that never changes: built once per game, the other one hidden.
     this.statics = { coaster: makeStaticWorld() };
+    shadowFlags(this.statics.coaster);
     this.scene.add(this.statics.coaster);
     this.space = makeSpace();
     this.scene.add(this.space.group);
@@ -77,8 +98,10 @@ export class Ride {
     this.scene.add(...this.cars);
     this.raft = makeRaft();
     this.scene.add(this.raft);
+    for (const o of [...this.cars, this.raft, this.seatCar, this.seatRaft, this.hands.group]) shadowFlags(o);
     this.spray = makeSprayTrail(this.scene);
     this.kid = makeRider('kid');
+    shadowFlags(this.kid.group);
     this.friend = null;
     this.friendKind = null;
 
@@ -93,7 +116,7 @@ export class Ride {
     this.chaseLook = new THREE.Vector3();
     this.timeScale = Number(new URLSearchParams(location.search).get('fast')) || 1; // debug: ?fast=4
 
-    this.resize();
+    this.applyQuality();
     window.addEventListener('resize', () => this.resize());
     this.loop = this.loop.bind(this);
   }
@@ -104,6 +127,36 @@ export class Ride {
 
   get eye() {
     return this.slide ? RAFT_EYE : EYE;
+  }
+
+  // Pixel ratio and shadows for the current quality tier (also after stepping down mid-ride).
+  applyQuality() {
+    const q = quality();
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.pixelRatio));
+    this.sun.castShadow = q.shadows > 0;
+    if (q.shadows && this.sun.shadow.mapSize.x !== q.shadows) {
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+      this.sun.shadow.mapSize.set(q.shadows, q.shadows);
+    }
+    this.resize();
+  }
+
+  // The sky reflected in steel, fiberglass and water: rendered once per game into an environment map.
+  environment(kind) {
+    if (!this.envMaps[kind]) {
+      const env = new THREE.Scene();
+      const sky = makeSky();
+      sky.uniforms.top.value.copy(SKIES[kind].top);
+      sky.uniforms.horizon.value.copy(SKIES[kind].horizon);
+      sky.mesh.scale.setScalar(50 / 1800);
+      const ground = new THREE.Mesh(new THREE.CircleGeometry(49, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: SKIES[kind].ground }));
+      ground.position.y = -3;
+      env.add(sky.mesh, ground);
+      this.envMaps[kind] = this.pmrem.fromScene(env, 0.02).texture;
+      disposeTree(env);
+    }
+    return this.envMaps[kind];
   }
 
   resize() {
@@ -126,16 +179,20 @@ export class Ride {
       }
       this.track = track;
       this.world = this.slide ? makeSlideWorld(track, RAFT_EYE) : makeTrackWorld(track, EYE);
+      shadowFlags(this.world.group);
       this.scene.add(this.world.group);
       this.space.place(track.pos[(track.count >> 1) * 3]);
     }
     if (this.slide && !this.statics.slide) {
       this.statics.slide = makeBeachStaticWorld();
+      shadowFlags(this.statics.slide);
       this.scene.add(this.statics.slide);
     }
     for (const [k, group] of Object.entries(this.statics)) group.visible = k === kind;
     this.sky = SKIES[kind];
     this.hemi.groundColor.copy(this.sky.ground);
+    this.scene.environment = this.environment(kind);
+    this.frames.reset();
     this.streaks.lines.material.color.set(this.slide ? '#d8f4ff' : '#ffffff');
     for (const p of this.world.pickups) p.holder.visible = true;
 
@@ -155,6 +212,7 @@ export class Ride {
     const choices = FRIENDS.filter((f) => f !== this.friendKind);
     this.friendKind = choices[Math.floor(Math.random() * choices.length)];
     this.friend = makeRider(this.friendKind);
+    shadowFlags(this.friend.group);
 
     this.s = 0;
     this.v = 0;
@@ -252,6 +310,8 @@ export class Ride {
 
   loop(now) {
     if (!this.running) return;
+    // Slow frames for a while: step the looks down a notch.
+    if (this.frames.add((now - this.last) / 1000) && stepDown()) this.applyQuality();
     // Allow long frames so a slow device doesn't put the whole ride in slow motion.
     const dt = Math.min(0.1, (now - this.last) / 1000) * this.timeScale;
     this.last = now;
@@ -287,6 +347,7 @@ export class Ride {
     else this.placeChaseCamera(dt, false);
     this.speedFeel(dt);
     this.updateSky();
+    this.placeSun();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.loop);
   }
@@ -357,6 +418,28 @@ export class Ride {
     this.scene.fog.near = 250 + h * 2;
     this.scene.fog.far = 2600 + h * 9;
     this.space.update(this.camera.position, space);
+  }
+
+  // The shadow box follows the train, reaching a little ahead of the camera, snapped to whole
+  // shadow-map texels so shadow edges don't crawl as it moves. Warmer, lower sun at the finish.
+  placeSun() {
+    const sun = this.sun;
+    sun.color.copy(SUN_COLOR).lerp(DUSK_SUN, this.dusk);
+    sun.intensity = 2.3 - this.dusk * 0.9;
+    this.scene.environmentIntensity = 1 - this.dusk * 0.4;
+    if (!sun.castShadow) return;
+    const focus = this.vec(this.track.pos, this.s);
+    const fwd = this.camera.getWorldDirection(new THREE.Vector3()).setY(0);
+    if (fwd.lengthSq() > 1e-4) focus.addScaledVector(fwd.normalize(), SHADOW_R * 0.4);
+    const x = new THREE.Vector3().crossVectors(UP, SUN_DIR).normalize();
+    const y = new THREE.Vector3().crossVectors(SUN_DIR, x);
+    const texel = (2 * SHADOW_R) / sun.shadow.mapSize.x;
+    for (const axis of [x, y]) {
+      const d = focus.dot(axis);
+      focus.addScaledVector(axis, Math.round(d / texel) * texel - d);
+    }
+    sun.target.position.copy(focus);
+    sun.position.copy(focus).addScaledVector(SUN_DIR, 300);
   }
 
   // Things that happen at places along the track.

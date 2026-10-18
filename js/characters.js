@@ -23,7 +23,7 @@ const ball = (color, p, r, s = [1, 1, 1]) => part(SPHERE, color, p, [r * s[0], r
 const paints = new Map();
 const paint = (color, shininess = 80) => {
   const key = color + shininess;
-  if (!paints.has(key)) paints.set(key, new THREE.MeshPhongMaterial({ color, shininess, specular: '#666666' }));
+  if (!paints.has(key)) paints.set(key, new THREE.MeshStandardMaterial({ color, metalness: 0.15, roughness: Math.max(0.15, 1 - shininess / 110) }));
   return paints.get(key);
 };
 const CHROME = '#d5dbe2';

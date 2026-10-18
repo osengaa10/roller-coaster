@@ -9,8 +9,34 @@ const HIGH = 300; // meters: above this, track geometry is built with less detai
 
 // Fresh (uncached) materials, so a track's world can be disposed in one go.
 export const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
-// Painted steel: picks up a highlight from the sun.
-export const shiny = (color, extra = {}) => new THREE.MeshPhongMaterial({ color, shininess: 70, specular: '#4d4d4d', ...extra });
+// Painted steel: picks up a highlight from the sun and reflects the sky. Old Phong-style
+// shininess (0..150) still works and turns into roughness.
+export const shiny = (color, { shininess = 70, specular, ...extra } = {}) =>
+  new THREE.MeshStandardMaterial({ color, metalness: 0.35, roughness: Math.max(0.12, 1 - shininess / 110), ...extra });
+
+// Who casts and who catches the sun's shadows. Everything solid casts, except see-through
+// things, giant things (the ground, the sea) and anything marked userData.noShadow; everything
+// catches them except the marked ones.
+export function shadowFlags(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.userData.noShadow) {
+      o.castShadow = o.receiveShadow = false;
+      return;
+    }
+    const material = [].concat(o.material)[0];
+    let r;
+    if (o.isInstancedMesh) {
+      o.computeBoundingSphere();
+      r = o.boundingSphere.radius;
+    } else {
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      r = o.geometry.boundingSphere.radius * Math.max(o.scale.x, o.scale.y, o.scale.z);
+    }
+    o.receiveShadow = !material.isShaderMaterial;
+    o.castShadow = !material.transparent && !material.isShaderMaterial && !o.userData.noCast && r < 400;
+  });
+}
 
 export const Y_AXIS = new THREE.Vector3(0, 1, 0);
 // Matrix for a unit cylinder (radius 1, height 1, centered) stretched from a to b.
