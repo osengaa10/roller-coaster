@@ -117,7 +117,7 @@ export function makeSky() {
 // --- Grass -------------------------------------------------------------------------------
 
 let grassTexture = null;
-function getGrassTexture() {
+export function getGrassTexture() {
   if (grassTexture) return grassTexture;
   const size = 512;
   const c = document.createElement('canvas');
@@ -497,17 +497,21 @@ export function makeLandscape(bounds, keepOut, nearTrack) {
 export function merge(geos) {
   const parts = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   const count = parts.reduce((n, g) => n + g.attributes.position.count, 0);
+  const withUv = parts.every((g) => g.attributes.uv);
   const pos = new Float32Array(count * 3);
   const nor = new Float32Array(count * 3);
+  const uv = withUv ? new Float32Array(count * 2) : null;
   let o = 0;
   for (const g of parts) {
     pos.set(g.attributes.position.array, o * 3);
     nor.set(g.attributes.normal.array, o * 3);
+    if (uv) uv.set(g.attributes.uv.array, o * 2);
     o += g.attributes.position.count;
   }
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  if (uv) out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return out;
 }
 

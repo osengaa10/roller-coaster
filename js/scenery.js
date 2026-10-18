@@ -1,11 +1,13 @@
 // The 3D world: sky, ground, trees, and everything built from a drawn track.
 import * as THREE from 'three';
 import { supportSpots, supportLegs, starSpots, splashSpot, tunnelRuns } from './track.js';
-import { makeClouds, makeMountains, makeLandscape } from './nature.js';
+import { makeClouds, makeMountains, makeLandscape, getGrassTexture, merge } from './nature.js';
+import { concreteTexture, plankTexture, gratingTexture, stoneTexture, glowTexture } from './textures.js';
 
 const RAIL_GAP = 0.6; // half distance between rails
 const SPINE_DROP = 0.6; // spine center below the rails
 const HIGH = 300; // meters: above this, track geometry is built with less detail
+const CATWALK = 1.4; // meters from the middle of the track to the catwalk's inner edge
 
 // Fresh (uncached) materials, so a track's world can be disposed in one go.
 export const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
@@ -73,17 +75,19 @@ export function makeTrackWorld(tr, eye) {
   const high = (i) => tr.pos[i * 3 + 1] > HIGH;
   const geoIds = all.filter((i) => !high(i) || i % 3 === 0 || i === n - 1);
   for (const s of [-1, 1]) {
-    const rail = tube(geoIds, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 10, colorAt: railPaint });
+    const rail = tube(geoIds, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 12, colorAt: railPaint });
     g.add(new THREE.Mesh(rail, steel));
   }
-  g.add(new THREE.Mesh(tube(geoIds, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 12, colorAt: paint }), steel));
+  g.add(new THREE.Mesh(tube(geoIds, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 16, colorAt: paint }), steel));
+  const updates = [];
 
-  // Cross-ties every meter: a crossbar under the rails, braced down to the spine.
+  // Cross-ties every meter: a crossbar under the rails with a clamp round each rail and a plate
+  // down to the spine, braced down to the spine.
   const m = new THREE.Matrix4();
   const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8);
   const unitBox = new THREE.BoxGeometry(1, 1, 1);
   const tieIds = all.filter((i) => i % 2 === 0 && (!high(i) || i % 8 === 0));
-  const bars = new THREE.InstancedMesh(unitBox, shiny('#ffffff'), tieIds.length);
+  const bars = new THREE.InstancedMesh(tieGeometry(), shiny('#ffffff'), tieIds.length);
   const braces = new THREE.InstancedMesh(unitCyl, shiny('#ffffff'), tieIds.length * 2);
   const col = new THREE.Color();
   tieIds.forEach((i, k) => {
@@ -91,7 +95,7 @@ export function makeTrackWorld(tr, eye) {
     const sd = side(i);
     const p = P(i);
     col.fromArray(paint(i).map((v) => v * 0.72));
-    m.makeBasis(sd, u, T(i)).scale(new THREE.Vector3(1.45, 0.1, 0.16)).setPosition(p.clone().addScaledVector(u, -0.15));
+    m.makeBasis(sd, u, T(i)).setPosition(p);
     bars.setMatrixAt(k, m);
     bars.setColorAt(k, col);
     const spine = p.clone().addScaledVector(u, -SPINE_DROP);
@@ -115,10 +119,57 @@ export function makeTrackWorld(tr, eye) {
       }
     });
     g.add(links);
+    // Anti-rollback teeth beside the chain (the clack-clack-clack).
+    const teeth = new THREE.InstancedMesh(unitBox, shiny('#8a9099', { shininess: 40 }), liftIds.length);
+    liftIds.forEach((i, k) => {
+      const at = P(i).addScaledVector(U(i), -0.1).addScaledVector(side(i), 0.24);
+      m.makeBasis(side(i), U(i), T(i)).multiply(new THREE.Matrix4().makeRotationX(0.35)).scale(new THREE.Vector3(0.06, 0.06, 0.26)).setPosition(at);
+      teeth.setMatrixAt(k, m);
+    });
+    g.add(teeth);
+    // A maintenance catwalk up the climbs on one side: steel grating, posts and a handrail.
+    const runsOf = (ids) => {
+      const out = [];
+      for (const i of ids) {
+        const last = out[out.length - 1];
+        if (last && i - last[last.length - 1] <= 1) last.push(i);
+        else out.push([i]);
+      }
+      return out.filter((r) => r.length > 4).map((r) => r.filter((i, k) => !high(i) || i % 3 === 0 || k === r.length - 1));
+    };
+    const walk = new THREE.MeshStandardMaterial({ color: '#c3cad2', map: gratingTexture(), alphaTest: 0.5, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5 });
+    const railMat = shiny('#d9dee4');
+    const posts = [];
+    for (const ids of runsOf(liftIds)) {
+      const edge = (i, d) => P(i).addScaledVector(U(i), -0.55).addScaledVector(side(i), CATWALK + d);
+      g.add(new THREE.Mesh(ribbon(ids, (i) => edge(i, 0), (i) => edge(i, 0.75), (i) => (i * tr.step) / 0.75), walk));
+      g.add(new THREE.Mesh(tube(ids, (i) => edge(i, 0.75).addScaledVector(U(i), 1.0), U, side, 0.035, { sides: 6 }), railMat));
+      g.add(new THREE.Mesh(tube(ids, (i) => edge(i, 0.75).addScaledVector(U(i), 0.5), U, side, 0.025, { sides: 5 }), railMat));
+      for (let k = 0; k < ids.length; k += 4) posts.push(ids[k]);
+    }
+    if (posts.length) {
+      const postMesh = new THREE.InstancedMesh(unitCyl, railMat, posts.length);
+      posts.forEach((i, k) => {
+        const foot = P(i).addScaledVector(U(i), -0.55).addScaledVector(side(i), CATWALK + 0.75);
+        postMesh.setMatrixAt(k, beam(m, foot, foot.clone().addScaledVector(U(i), 1.0), 0.03));
+      });
+      g.add(postMesh);
+    }
   }
 
-  // Supports: concrete footing, steel column(s), and a saddle under the spine.
-  // Tall ones are A-frames with cross braces (their legs were checked against the track).
+  // Brake fins along the last stretch, where the train slows back into the station.
+  const finIds = all.filter((i) => i > n - 40 && i % 2 === 0 && !high(i));
+  if (finIds.length) {
+    const fins = new THREE.InstancedMesh(unitBox, shiny('#c9824a', { shininess: 60 }), finIds.length);
+    finIds.forEach((i, k) => {
+      m.makeBasis(side(i), U(i), T(i)).scale(new THREE.Vector3(0.03, 0.22, 0.85)).setPosition(P(i).addScaledVector(U(i), -0.3));
+      fins.setMatrixAt(k, m);
+    });
+    g.add(fins);
+  }
+
+  // Supports: concrete footing, steel column(s) with bolted flanges, and a saddle under the spine.
+  // Tall ones are A-frames with cross braces and X-bracing (their legs were checked against the track).
   const columns = [];
   const footings = [];
   const saddles = [];
@@ -127,27 +178,50 @@ export function makeTrackWorld(tr, eye) {
     if (sp.spread > 0) {
       const legs = supportLegs(sp).map(([a, b]) => [new THREE.Vector3(b.x, 0.4, b.z), new THREE.Vector3(a.x, a.y - 0.3, a.z)]);
       for (const [bottom, legTop] of legs) {
-        columns.push([bottom, legTop, 0.2]);
+        columns.push([bottom, legTop, 0.2, true]);
         footings.push(bottom);
       }
+      const levels = [];
       for (let y = 6; y < sp.y - 3; y += Math.max(7, sp.y / 8)) {
         const f = y / (sp.y - 0.3);
         const [l, r] = legs.map(([b, t]) => b.clone().lerp(t, f));
         columns.push([l, r, 0.11]);
+        levels.push([l, r]);
+      }
+      for (let k = 1; k < levels.length; k++) {
+        columns.push([levels[k - 1][0], levels[k][1], 0.07]);
+        columns.push([levels[k - 1][1], levels[k][0], 0.07]);
       }
     } else {
       const bottom = new THREE.Vector3(sp.x, 0.4, sp.z);
-      columns.push([bottom, top, 0.26]);
+      columns.push([bottom, top, 0.26, true]);
       footings.push(bottom);
     }
     saddles.push([top, sp.dir, sp.spread > 0 ? 1.1 : 0.8]);
   }
   if (columns.length) {
     const steelGrey = shiny('#e3e8ef');
-    const cols = new THREE.InstancedMesh(unitCyl, steelGrey, columns.length);
+    const cols = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 12), steelGrey, columns.length);
     columns.forEach(([a, b, r], k) => cols.setMatrixAt(k, beam(m, a, b, r)));
-    const feet = new THREE.InstancedMesh(unitBox, mat('#c4c4c4'), footings.length);
-    footings.forEach((f, k) => feet.setMatrixAt(k, m.makeScale(1.3, 0.8, 1.3).setPosition(f.x, 0.3, f.z)));
+    // Bolted flanges where the column sections join, every 8 m.
+    const flanges = [];
+    for (const [a, b, r, main] of columns) {
+      if (!main) continue;
+      const len = a.distanceTo(b);
+      for (let d = 8; d < len - 2; d += 8) flanges.push([a.clone().lerp(b, d / len), b.clone().sub(a).normalize(), r]);
+    }
+    const flangeMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 14), steelGrey, Math.max(1, flanges.length));
+    flangeMesh.count = flanges.length;
+    flanges.forEach(([at, dir, r], k) => flangeMesh.setMatrixAt(k, beam(m, at.clone().addScaledVector(dir, -0.05), at.clone().addScaledVector(dir, 0.05), r * 1.55)));
+    const feet = new THREE.InstancedMesh(footingGeometry(), new THREE.MeshStandardMaterial({ color: '#d4d2cc', map: concreteTexture(), roughness: 0.9 }), footings.length);
+    footings.forEach((f, k) => feet.setMatrixAt(k, m.makeTranslation(f.x, 0, f.z)));
+    // Darker ground where each footing sits.
+    const dirt = new THREE.InstancedMesh(
+      new THREE.CircleGeometry(1, 16).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#2b2416', transparent: true, opacity: 0.28, depthWrite: false }),
+      footings.length,
+    );
+    footings.forEach((f, k) => dirt.setMatrixAt(k, m.makeScale(1.6, 1, 1.6).setPosition(f.x, 0.05, f.z)));
     const caps = new THREE.InstancedMesh(unitBox, steelGrey, saddles.length);
     saddles.forEach(([t, dir, w], k) => {
       const across = new THREE.Vector3(dir.x, 0, dir.z);
@@ -155,21 +229,73 @@ export function makeTrackWorld(tr, eye) {
       m.makeBasis(across, Y_AXIS, along).scale(new THREE.Vector3(w, 0.3, 0.5)).setPosition(t);
       caps.setMatrixAt(k, m);
     });
-    g.add(cols, feet, caps);
+    g.add(cols, flangeMesh, feet, dirt, caps);
   }
 
-  // Station: platform and a bright roof high enough to see out from under.
+  // Station: a wooden platform with a yellow safety edge, an airgate fence and queue rails, under
+  // a gabled roof on trusses (high enough to see out from under), with lights and a star sign.
   const st = new THREE.Group();
-  const platform = new THREE.Mesh(new THREE.BoxGeometry(10, 1.2, 4), mat('#d9a066'));
+  const planks = plankTexture().clone();
+  planks.needsUpdate = true;
+  planks.repeat.set(3, 1.2);
+  const platform = new THREE.Mesh(new THREE.BoxGeometry(10, 1.2, 4), [
+    mat('#b7865a'),
+    mat('#b7865a'),
+    new THREE.MeshLambertMaterial({ color: '#e0b98a', map: planks }),
+    mat('#b7865a'),
+    mat('#b7865a'),
+    mat('#b7865a'),
+  ]);
   platform.position.set(4.5, 0.6, -3.5);
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(11, 0.5, 8), new THREE.MeshBasicMaterial({ color: '#ff8c42' }));
-  roof.position.set(4.5, 10, 0);
-  st.add(platform, roof);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(10, 0.03, 0.3), mat('#ffd23f'));
+  edge.position.set(4.5, 1.215, -1.68);
+  st.add(platform, edge);
+  const chrome = shiny('#e8edf2', { shininess: 100, metalness: 0.9 });
+  const fence = [];
+  // Airgates: short rails with gaps for each car, then the queue rail along the back.
+  for (const [x0, x1] of [[-0.3, 1.6], [2.4, 4.3], [5.1, 7.0], [7.8, 9.3]]) {
+    fence.push([[x0, 2.2, -2.4], [x1, 2.2, -2.4], 0.04], [[x0, 1.7, -2.4], [x1, 1.7, -2.4], 0.03]);
+    for (const x of [x0, x1]) fence.push([[x, 1.2, -2.4], [x, 2.2, -2.4], 0.04]);
+  }
+  fence.push([[-0.3, 2.2, -5.2], [9.3, 2.2, -5.2], 0.04], [[-0.3, 1.7, -5.2], [9.3, 1.7, -5.2], 0.03]);
+  for (let x = -0.3; x <= 9.4; x += 1.94) fence.push([[x, 1.2, -5.2], [x, 2.2, -5.2], 0.04]);
+  const fenceMesh = new THREE.InstancedMesh(unitCyl, chrome, fence.length);
+  fence.forEach(([a, b, r], k) => fenceMesh.setMatrixAt(k, beam(m, new THREE.Vector3(...a), new THREE.Vector3(...b), r)));
+  st.add(fenceMesh);
+  const roofMat = new THREE.MeshStandardMaterial({ color: '#ff8c42', emissive: '#5a2400', roughness: 0.7 });
+  for (const s2 of [-1, 1]) {
+    const half = new THREE.Mesh(new THREE.BoxGeometry(11.4, 0.25, 4.6), roofMat);
+    half.rotation.x = s2 * 0.32;
+    half.position.set(4.5, 10.75, s2 * 2.1);
+    st.add(half);
+  }
+  const ridgeCap = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 11.6, 10).rotateZ(Math.PI / 2), mat('#ffd23f'));
+  ridgeCap.position.set(4.5, 11.45, 0);
+  st.add(ridgeCap);
+  const truss = [];
+  for (const x of [0, 3, 6, 9]) {
+    truss.push([[x, 10, -3.6], [x, 10, 3.6], 0.08], [[x, 10, -3.6], [x, 11.2, 0], 0.06], [[x, 10, 3.6], [x, 11.2, 0], 0.06], [[x, 10, 0], [x, 11.2, 0], 0.05]);
+  }
+  truss.push([[0, 10, -3.6], [9, 10, -3.6], 0.08], [[0, 10, 3.6], [9, 10, 3.6], 0.08]);
+  const trussMesh = new THREE.InstancedMesh(unitCyl, shiny('#f4f4f4'), truss.length);
+  truss.forEach(([a, b, r], k) => trussMesh.setMatrixAt(k, beam(m, new THREE.Vector3(...a), new THREE.Vector3(...b), r)));
+  st.add(trussMesh);
+  const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.MeshBasicMaterial({ color: '#fff6d8' }), 6);
+  [1.5, 4.5, 7.5].forEach((x, k) => {
+    lamps.setMatrixAt(k * 2, m.makeTranslation(x, 9.8, -1.8));
+    lamps.setMatrixAt(k * 2 + 1, m.makeTranslation(x, 9.8, 1.8));
+  });
+  lamps.userData.noShadow = true;
+  st.add(lamps);
   for (const [x, z] of [[0, -3.2], [9, -3.2], [0, 3.2], [9, 3.2]]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 10, 8), mat('#8a5a3c'));
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 10, 12), mat('#8a5a3c'));
     post.position.set(x, 5, z);
     st.add(post);
   }
+  const sign = new THREE.Mesh(makeStarGeometry(), new THREE.MeshStandardMaterial({ color: '#ffd23f', emissive: '#6a4a00', metalness: 0.7, roughness: 0.3 }));
+  sign.scale.setScalar(1.6);
+  sign.position.set(4.5, 12.6, -2.6);
+  st.add(sign);
   g.add(st);
 
   // Splash pond in the deepest dip after a big drop.
@@ -186,33 +312,72 @@ export function makeTrackWorld(tr, eye) {
     sand.position.set(pondAt.x, 0.04, pondAt.z);
     water.position.set(pondAt.x, 0.08, pondAt.z);
     g.add(sand, water);
+    // Pebbles round the edge and clumps of reeds.
+    const prand = mulberry32(splash * 13 + 5);
+    const stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true }), 46);
+    const stoneTones = ['#9a958c', '#857f76', '#aaa398'].map((c) => new THREE.Color(c));
+    for (let k = 0; k < 46; k++) {
+      const a = (k / 46) * Math.PI * 2 + prand() * 0.1;
+      const r = 9.4 + prand() * 0.9;
+      const sc = 0.3 + prand() * 0.45;
+      stones.setMatrixAt(k, m.compose(new THREE.Vector3(pondAt.x + Math.cos(a) * r, 0.05, pondAt.z + Math.sin(a) * r), new THREE.Quaternion().setFromAxisAngle(Y_AXIS, prand() * 6), new THREE.Vector3(sc, sc * 0.55, sc)));
+      stones.setColorAt(k, stoneTones[k % 3]);
+    }
+    const reeds = new THREE.InstancedMesh(new THREE.ConeGeometry(0.04, 1.6, 4).translate(0, 0.8, 0), mat('#5c8a3a'), 120);
+    for (let k = 0; k < 120; k++) {
+      const a = Math.floor(k / 20) * 1.1 + prand() * 0.25;
+      const r = 8.6 + prand() * 0.8;
+      const lean = new THREE.Quaternion().setFromEuler(new THREE.Euler((prand() - 0.5) * 0.4, 0, (prand() - 0.5) * 0.4));
+      reeds.setMatrixAt(k, m.compose(new THREE.Vector3(pondAt.x + Math.cos(a) * r, 0, pondAt.z + Math.sin(a) * r), lean, new THREE.Vector3(1, 0.7 + prand() * 0.6, 1)));
+    }
+    g.add(stones, reeds);
   }
 
-  // Tunnels where the track skims the ground: a grassy mound outside, dark inside, stone arches.
+  // Tunnels where the track skims the ground: a grassy mound outside, dark inside with a row of
+  // little lights, and stone-block portals.
   const tunnels = tunnelRuns(tr, splash);
   const inside = mat('#3a2a20', { side: THREE.BackSide });
-  const outside = mat('#5aa83c');
-  const stone = mat('#9a9a9a');
+  const turf = getGrassTexture().clone();
+  turf.needsUpdate = true;
+  turf.repeat.set(4, 1);
+  const outside = new THREE.MeshLambertMaterial({ color: '#cfe8b8', map: turf });
+  const stoneMap = stoneTexture().clone();
+  stoneMap.needsUpdate = true;
+  stoneMap.repeat.set(6, 1);
+  const stone = new THREE.MeshLambertMaterial({ color: '#ffffff', map: stoneMap });
+  const tunnelLights = [];
   for (const [a, b] of tunnels) {
     const ids = all.slice(a, b + 1);
     const center = (i) => P(i).addScaledVector(U(i), 0.3);
     g.add(new THREE.Mesh(tube(ids, center, U, side, 3.4, { sides: 16, arc: 1.95, toGround: true }), inside));
-    g.add(new THREE.Mesh(tube(ids, center, U, side, 3.8, { sides: 16, arc: 1.95, toGround: true }), outside));
+    g.add(new THREE.Mesh(tube(ids, center, U, side, 3.8, { sides: 16, arc: 1.95, toGround: true, uv: (i) => (i * tr.step) / 6 }), outside));
     for (const i of [a, b]) {
-      const arch = new THREE.Mesh(new THREE.TorusGeometry(3.6, 0.45, 8, 20, Math.PI), stone);
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(3.6, 0.5, 8, 24, Math.PI), stone);
       arch.applyMatrix4(frame(i).setPosition(center(i)));
       g.add(arch);
     }
+    for (let i = a + 3; i < b - 2; i += 6) tunnelLights.push(center(i).addScaledVector(U(i), 3.2));
+  }
+  if (tunnelLights.length) {
+    const lights = new THREE.InstancedMesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial({ color: '#ffe9a8' }), tunnelLights.length);
+    tunnelLights.forEach((at, k) => lights.setMatrixAt(k, m.makeTranslation(at.x, at.y, at.z)));
+    lights.userData.noShadow = true;
+    g.add(lights);
   }
 
   // Stars to fly through, right at seat height.
   const starGeo = makeStarGeometry();
-  const gold = mat('#ffd23f', { emissive: '#b07800' });
-  const stars = starSpots(tr).map((i) => {
+  const gold = new THREE.MeshStandardMaterial({ color: '#ffd23f', emissive: '#8a5a00', metalness: 0.8, roughness: 0.25 });
+  const glowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#ffd84a', transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
+  const stars = starSpots(tr).map((i, k) => {
     const holder = new THREE.Group();
     holder.applyMatrix4(frame(i).setPosition(P(i).addScaledVector(U(i), eye)));
     const spin = new THREE.Mesh(starGeo, gold);
-    holder.add(spin);
+    spin.userData.noShadow = true;
+    const glow = new THREE.Sprite(glowMat);
+    glow.scale.setScalar(2.6);
+    holder.add(spin, glow);
+    updates.push((dt, time) => glow.scale.setScalar(2.4 + 0.4 * Math.sin(time * 4 + k)));
     g.add(holder);
     return { holder, spin, s: i * tr.step, at: P(i).addScaledVector(U(i), eye) };
   });
@@ -238,7 +403,62 @@ export function makeTrackWorld(tr, eye) {
   };
   g.add(makeLandscape(box, keepOut, nearTrack));
 
-  return { group: g, pickups: stars, splash, tunnels };
+  return {
+    group: g,
+    pickups: stars,
+    splash,
+    tunnels,
+    update(dt, time) {
+      for (const u of updates) u(dt, time);
+    },
+  };
+}
+
+// One cross-tie in the track's frame (x across, y up, origin between the rails): the crossbar,
+// a clamp under each rail and a plate down to the spine.
+function tieGeometry() {
+  return merge([
+    new THREE.BoxGeometry(1.4, 0.08, 0.14).translate(0, -0.15, 0),
+    new THREE.BoxGeometry(0.2, 0.13, 0.2).translate(-RAIL_GAP, -0.09, 0),
+    new THREE.BoxGeometry(0.2, 0.13, 0.2).translate(RAIL_GAP, -0.09, 0),
+    new THREE.BoxGeometry(0.06, 0.24, 0.12).translate(0, -0.29, 0),
+  ]);
+}
+
+// A concrete footing: a block with a chamfered top and four anchor bolts.
+function footingGeometry() {
+  const bolts = [[-0.32, -0.32], [0.32, -0.32], [-0.32, 0.32], [0.32, 0.32]].map(([x, z]) => new THREE.CylinderGeometry(0.05, 0.05, 0.2, 6).translate(x, 0.95, z));
+  return merge([
+    new THREE.BoxGeometry(1.4, 0.6, 1.4).translate(0, 0.3, 0),
+    new THREE.CylinderGeometry(0.62, 0.98, 0.3, 4, 1).rotateY(Math.PI / 4).translate(0, 0.75, 0),
+    ...bolts,
+  ]);
+}
+
+// A flat strip between two edge lines (left(i), right(i)), facing up, with u across and
+// v = along(i) for textures.
+export function ribbon(ids, left, right, along) {
+  const n = ids.length;
+  const pos = new Float32Array(n * 6);
+  const uv = new Float32Array(n * 4);
+  ids.forEach((id, k) => {
+    const a = left(id);
+    const b = right(id);
+    pos.set([a.x, a.y, a.z, b.x, b.y, b.z], k * 6);
+    const v = along(id);
+    uv.set([0, v, 1, v], k * 4);
+  });
+  const index = [];
+  for (let k = 0; k < n - 1; k++) {
+    const a = k * 2;
+    index.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(index);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 function makeStarGeometry() {

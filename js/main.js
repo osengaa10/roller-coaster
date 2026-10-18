@@ -3,6 +3,7 @@ import { Ride } from './ride.js';
 import { buildTrack } from './track.js';
 import { loadStrokes, saveStrokes } from './storage.js';
 import * as sound from './sound.js';
+import { prewarm } from './textures.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -35,6 +36,7 @@ function changed() {
 }
 changed();
 show('pick');
+prewarm(); // build the ride's textures while he picks and draws
 
 function pick(m) {
   mode = m;

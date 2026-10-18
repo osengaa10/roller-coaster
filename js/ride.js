@@ -91,9 +91,9 @@ export class Ride {
     // Outside view: a real train with him and his friend in the front car, or the two of them
     // on a ring float, one behind the other.
     this.cars = [
-      makeTrainCar('#ee4266', true),
-      makeTrainCar('#ffd23f'),
-      makeTrainCar('#3bceac'),
+      makeTrainCar('#ee4266', true, { number: 1 }),
+      makeTrainCar('#ffd23f', false, { number: 2 }),
+      makeTrainCar('#3bceac', false, { number: 3 }),
     ];
     this.scene.add(...this.cars);
     this.raft = makeRaft();

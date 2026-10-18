@@ -20,6 +20,7 @@ const SHELL = [
   'js/tropical.js',
   'js/draw-slide.js',
   'js/quality.js',
+  'js/textures.js',
   'vendor/three.module.min.js',
   'icons/icon-192.png',
   'icons/apple-touch-icon.png',
