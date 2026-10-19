@@ -76,6 +76,74 @@ test('a drawn loop turns the rider upside down at the top, upright after', () =>
   }
 });
 
+function assertNoUpJumps(tr) {
+  for (let i = 1; i < tr.count; i++) {
+    const d = tr.up[i * 3] * tr.up[i * 3 - 3] + tr.up[i * 3 + 1] * tr.up[i * 3 - 2] + tr.up[i * 3 + 2] * tr.up[i * 3 - 1];
+    assert.ok(d > 0.9, `up vector jumps at sample ${i}`);
+  }
+}
+
+test('an overhand (clockwise) loop is ridden on the inside', () => {
+  // Down off a hill, round the bottom going left, up and out right through the crossing.
+  const pts = [[0.4, 0.6], [0.6, 0.55], [0.75, 0.45], [0.85, 0.3], [0.82, 0.15], [0.7, 0.1], [0.6, 0.18], [0.6, 0.32], [0.7, 0.45], [0.85, 0.55], [1.0, 0.6], [1.4, 0.06]];
+  const cw = pts.slice(1).flatMap(([x, y], i) => stroke((t) => ({ x: pts[i][0] + (x - pts[i][0]) * t, y: pts[i][1] + (y - pts[i][1]) * t }), 30));
+  const tr = buildTrack([cw]);
+  assertFinite(tr);
+  assertNoUpJumps(tr);
+  // The bottom of the loop (heading left): inside means upright, not hanging underneath.
+  let bottom = -1;
+  for (let i = 0; i < tr.count; i++) {
+    if (tr.tan[i * 3] < -0.5 && tr.pos[i * 3 + 1] < 8 && (bottom < 0 || tr.pos[i * 3 + 1] < tr.pos[bottom * 3 + 1])) bottom = i;
+  }
+  assert.ok(bottom > 0, 'found the bottom of the loop');
+  assert.ok(upY(tr, bottom) > 0.8, `rides inside at the bottom, got ${upY(tr, bottom)}`);
+  assert.ok(upY(tr, tr.count - 1) > 0.9);
+});
+
+test('scribbling back and forth makes flat, banked U-turns that stay upright', () => {
+  const scrib = [{ x: 0.3, y: 0.3 }];
+  for (let k = 0; k < 6; k++) {
+    const x0 = k % 2 ? 1.0 : 0.5;
+    scrib.push(...stroke((t) => ({ x: x0 + (k % 2 ? -1 : 1) * t * 0.5, y: 0.3 + k * 0.03 + t * 0.03 }), 60));
+  }
+  const tr = buildTrack([scrib]);
+  assertFinite(tr);
+  assertNoUpJumps(tr);
+  const lanes = (i) => tr.pos[i * 3 + 1] > 11; // up on the scribble, past the climb
+  let banked = false;
+  for (let i = 0; i < tr.count; i++) {
+    if (!lanes(i)) continue;
+    assert.ok(upY(tr, i) > 0.5, `upright on the scribble, got ${upY(tr, i)} at ${i}`);
+    if (upY(tr, i) < 0.85) banked = true;
+  }
+  assert.ok(banked, 'leans into the U-turns');
+  // Lanes move over sideways and the turns never run into another part of the track.
+  const far = Math.round(20 / tr.step);
+  for (let i = 0; i < tr.count; i += 2) {
+    for (let j = i + far; j < tr.count; j += 2) {
+      const d = Math.hypot(tr.pos[i * 3] - tr.pos[j * 3], tr.pos[i * 3 + 1] - tr.pos[j * 3 + 1], tr.pos[i * 3 + 2] - tr.pos[j * 3 + 2]);
+      assert.ok(d > 3, `track at ${i} and ${j} only ${d.toFixed(2)} m apart`);
+    }
+  }
+});
+
+test('a tall turnaround (half loop) still goes over the top, not round a flat U-turn', () => {
+  const half = [
+    ...stroke((t) => ({ x: 0.3 + t * 0.4, y: 0.06 })),
+    ...stroke((t) => {
+      const a = -Math.PI / 2 + t * Math.PI;
+      return { x: 0.7 + 0.15 * Math.cos(a), y: 0.21 + 0.15 * Math.sin(a) };
+    }),
+    ...stroke((t) => ({ x: 0.7 - t * 0.2, y: 0.36 })),
+  ];
+  const tr = buildTrack([half]);
+  assertFinite(tr);
+  assertNoUpJumps(tr);
+  const top = Array.from({ length: tr.count }, (_, i) => tr.pos[i * 3 + 1]).findIndex((y) => y > 13);
+  assert.ok(top > 0 && Math.abs(tr.pos[top * 3 + 2]) < 3, 'goes up over the top in the drawing plane');
+  assert.ok(Math.min(...Array.from({ length: tr.count }, (_, i) => upY(tr, i))) < 0.3, 'tips over on the way round');
+});
+
 test('long right-to-left drawing is rolled back upright', () => {
   const back = stroke((t) => ({ x: 1.5 - t * 1.4, y: 0.3 }));
   const tr = buildTrack([[{ x: 1.5, y: 0.3 }], back]);

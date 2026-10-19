@@ -43,6 +43,19 @@ const ENCLOSE_UP = 0.4; // slide steeper than this (or upside down) is a closed 
 const ENCLOSE_PAD = 6; // meters of closed tube either side, so the tube pieces don't flicker
 const Z_DRIFT = 0.4; // sideways shift per unit of backwards travel, keeps loops from hitting themselves
 const LONG_INVERSION = 22; // meters; longer upside-down runs get rolled back upright
+// Drawn loops (the line crosses itself around a roundish shape) are ridden on the inside,
+// whichever way round he drew them. Too small and there's no room to roll in; too big and
+// it's really an out-and-back circuit, not a loop.
+const LOOP_MIN = 0.45; // normalized perimeter
+const LOOP_MAX = 2.5;
+const LOOP_ROUND = 0.35; // 4*pi*area / perimeter^2: 1 for a circle, ~0 for a thin sliver
+// Scribbles back and forth: a tight, flat turnaround becomes a banked U-turn out sideways (z),
+// so each lane rides upright and the next one sits a little further over.
+const HAIRPIN_REACH = 0.15; // normalized: how far either side of the turn to look for the lanes
+const HAIRPIN_GAP = 0.08; // normalized: lanes further apart than this are a tall turn, kept as drawn
+const HAIRPIN_FLAT = Math.cos(Math.PI / 6); // a lane is within 30 degrees of level
+const HAIRPIN_R = 3.5; // meters
+const HAIRPIN_BANK = 0.75; // radians of lean at the middle of the turn
 
 // Crayon colors. Index RAINBOW cycles through hues along the track.
 export const TRACK_COLORS = ['#e63946', '#ff8c42', '#3bb273', '#3a86ff', '#9b5de5'];
@@ -104,11 +117,11 @@ export function drawnLength(strokes, kind = 'coaster') {
 }
 
 // Evenly spaced points along a polyline (works for any dimension via keys).
-// Labels (crayon `c`, wobble `w`, and the slide's pool, bowl and rapids tags) ride along
+// Labels (crayon `c`, wobble `w`, loop `lp`, hairpin `hp`, and the slide's pool, bowl and rapids tags) ride along
 // un-interpolated: each segment takes its end point's labels, so the line joining two strokes
 // matches the new stroke. `lerp` fields are interpolated without counting toward distance.
 // A bowl marker is passed on to exactly one output point.
-const CARRY = ['c', 'w', 'pool', 'bp', 'bi', 'rp', 'rl'];
+const CARRY = ['c', 'w', 'pool', 'bp', 'bi', 'rp', 'rl', 'lp', 'hp'];
 export function resample(pts, spacing, keys = ['x', 'y'], lerp = []) {
   const clean = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
@@ -214,21 +227,47 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   const withEnd = resample([...drawn, ...tail], 0.012);
   const flat = smooth(withEnd, 10);
   for (const p of flat) p.y = Math.max(p.y, p.pool ? POOL_Y : MIN_Y);
+  // Coaster loops get tagged with which way round they go; tight flat turnarounds become hairpins.
+  const loops = slide ? [] : findLoops(flat);
+  for (const { a, b, dir } of loops) for (let k = a; k <= b; k++) flat[k].lp = dir;
+  const hairpins = slide ? new Map() : findHairpins(flat, loops);
 
   // 2. Into 3D meters, drifting sideways (z) whenever the path doubles back. Each bowl is
   // spliced in where its circle was, and everything after it moves over to where it comes out.
+  // Hairpins work the same way: a U-turn out sideways, and the rest of the track moves over.
   let z = 0;
   const shift = { x: 0, z: 0 };
   const stretch = slide ? rapidsStretch(flat) : null;
   const bowlInfo = [];
   const pts3 = [];
+  const drift = (k) => Math.max(0, flat[k - 1].x - flat[k].x) * Z_DRIFT;
   for (let i = 0; i < flat.length; i++) {
     const p = flat[i];
-    if (i > 0) z += Math.max(0, flat[i - 1].x - p.x) * Z_DRIFT;
+    if (i > 0) z += drift(i);
     // Rapids from a narrow zigzag get stretched out to their proper length.
     if (stretch && i > 0 && stretch[i] !== 1) shift.x += (p.x - flat[i - 1].x) * (stretch[i] - 1) * WORLD_SCALE;
     const q = { x: (p.x - station.x0) * WORLD_SCALE + shift.x, y: p.y * WORLD_SCALE, z: z * WORLD_SCALE + shift.z, c: p.c ?? 0 };
     if (slide) Object.assign(q, { hx: 0, hy: 1, hz: 0, hw: 0, rp: p.rp });
+    else q.bank = 0;
+    if (p.lp) q.lp = p.lp;
+    const hp = hairpins.get(i);
+    if (hp && pts3.length) {
+      pts3.push(q);
+      // Where lane b lands: drawn x, drawn height, and one turn's width further over.
+      let zb = z;
+      for (let k = i + 1; k <= hp.b; k++) zb += drift(k);
+      const end = { x: (flat[hp.b].x - station.x0) * WORLD_SCALE + shift.x, y: flat[hp.b].y * WORLD_SCALE, z: q.z + 2 * HAIRPIN_R };
+      const prev = pts3[pts3.length - 2];
+      const hIn = planDir(q.x - prev.x, q.z - prev.z, hp.dirIn);
+      const nb = Math.min(hp.b + 1, flat.length - 1);
+      const dxOut = flat[nb].x - flat[nb - 1].x;
+      const hOut = planDir(dxOut, Math.max(0, -dxOut) * Z_DRIFT, -hp.dirIn);
+      for (const h of hairpinPath(q, end, hIn, hOut, hp.dirIn)) pts3.push({ ...h, c: q.c });
+      shift.z += end.z - (zb * WORLD_SCALE + shift.z);
+      for (let k = i + 1; k < hp.b; k++) z += drift(k);
+      i = hp.b - 1; // lane b itself is added next time round, right where the turn comes out
+      continue;
+    }
     if (p.bowl && pts3.length) {
       let dir = dirX;
       for (let k = i - 2; k >= 0 && i - k < 40; k--) {
@@ -249,7 +288,7 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
     pts3.push(q);
   }
   const keys3 = ['x', 'y', 'z'];
-  const hintKeys = slide ? ['hx', 'hy', 'hz', 'hw'] : [];
+  const hintKeys = slide ? ['hx', 'hy', 'hz', 'hw'] : ['bank'];
   const rough = smooth(pts3, 4, keys3);
   let roughLength = 0;
   for (let i = 1; i < rough.length; i++) roughLength += dist(rough[i], rough[i - 1], keys3);
@@ -264,14 +303,26 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
 
   // 3. Frames. "up" is the in-plane normal of the drawn line, so loops turn him upside down.
   // In a bowl it's the funnel wall instead (from the hint), so he rides around the wall.
+  // In a hairpin it's straight up (or down, if he came in upside down), and the lane coming out
+  // carries on the same way up (sign), so a scribble's lanes all match.
   const tan = new Float32Array(n * 3);
   const normal = new Float32Array(n * 3);
+  const sign = new Int8Array(n);
   let prevN = [0, 1, 0];
+  let sg = 1;
+  let hpUp = 1;
   for (let i = 0; i < n; i++) {
     const a = samples[Math.max(0, i - 1)];
     const b = samples[Math.min(n - 1, i + 1)];
     const t = norm([b.x - a.x, b.y - a.y, b.z - a.z]) || [1, 0, 0];
-    let nv = slide && inBowl(i) ? [samples[i].hx, samples[i].hy, samples[i].hz] : [-t[1], t[0], 0];
+    const hp = samples[i].hp;
+    if (hp && (i === 0 || !samples[i - 1].hp)) hpUp = prevN[1] < 0 ? -1 : 1;
+    if (!hp && i > 0 && samples[i - 1].hp) sg = (t[0] < 0 ? -1 : 1) * hpUp;
+    sign[i] = sg;
+    let nv;
+    if (slide && inBowl(i)) nv = [samples[i].hx, samples[i].hy, samples[i].hz];
+    else if (hp) nv = [0, hpUp, 0];
+    else nv = [-t[1] * sg, t[0] * sg, 0];
     const d = dot(nv, t);
     nv = norm([nv[0] - t[0] * d, nv[1] - t[1] * d, nv[2] - t[2] * d]) || prevN;
     prevN = nv;
@@ -279,14 +330,22 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
     normal.set(nv, i * 3);
   }
 
-  // Long upside-down stretches (e.g. drawing right-to-left for a while) get a barrel roll
-  // back to upright; short ones (loops) stay upside down because that's the fun part.
+  // Loops are ridden on the inside: one drawn the "wrong" way round rolls over as it dives in
+  // and back after. Elsewhere, long upside-down stretches (e.g. drawing right-to-left for a
+  // while) get a barrel roll back to upright; short ones stay upside down because that's fun,
+  // unless they run into a hairpin: those turns (and the lanes either side) always ride upright.
   const flip = new Float32Array(n);
+  const free = (i) => !samples[i].lp && !samples[i].hp;
+  for (let i = 0; i < n; i++) {
+    if (samples[i].lp && samples[i].lp !== sign[i]) flip[i] = 1;
+    if (samples[i].hp && normal[i * 3 + 1] < 0) flip[i] = 1;
+  }
   for (let i = 0; i < n; ) {
-    if (normal[i * 3 + 1] < -0.2) {
+    if (free(i) && normal[i * 3 + 1] < -0.2) {
       let j = i;
-      while (j < n && normal[j * 3 + 1] < -0.2) j++;
-      if ((j - i) * step > LONG_INVERSION) flip.fill(1, i, j);
+      while (j < n && free(j) && normal[j * 3 + 1] < -0.2) j++;
+      const hairpin = (i > 0 && samples[i - 1].hp) || (j < n && samples[j].hp);
+      if (hairpin || (j - i) * step > LONG_INVERSION) flip.fill(1, i, j);
       i = j;
     } else i++;
   }
@@ -294,12 +353,11 @@ export function buildTrack(strokes, { kind = 'coaster' } = {}) {
   const up = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const t = [tan[i * 3], tan[i * 3 + 1], tan[i * 3 + 2]];
-    const nv = [normal[i * 3], normal[i * 3 + 1], normal[i * 3 + 2]];
-    const b = cross(t, nv);
-    const phi = roll[i] * Math.PI;
-    const c = Math.cos(phi);
-    const s = Math.sin(phi);
-    up.set(norm([nv[0] * c + b[0] * s, nv[1] * c + b[1] * s, nv[2] * c + b[2] * s]) || nv, i * 3);
+    let nv = [normal[i * 3], normal[i * 3 + 1], normal[i * 3 + 2]];
+    nv = rotateAbout(nv, t, roll[i] * Math.PI);
+    // Hairpins lean into the turn.
+    if (samples[i].bank) nv = rotateAbout(nv, t, samples[i].bank);
+    up.set(nv, i * 3);
   }
   if (slide) blendHints(samples, tan, up);
 
@@ -357,6 +415,141 @@ function rapidsStretch(flat) {
     const k = Math.max(1, Math.min(40, (flat[i].rl || span) / Math.max(span, 1e-3)));
     for (let m = i + 1; m <= j; m++) out[m] = k;
     i = j + 1;
+  }
+  return out;
+}
+
+// Drawn loops: wherever the 2D line crosses itself around a roundish shape. Returns the index
+// range between the two passes through the crossing, and which way round it goes (1 = counter-
+// clockwise, -1 = clockwise). Thin slivers (scribbled lanes crossing) and huge circuits don't count.
+function findLoops(pts) {
+  const n = pts.length;
+  if (n < 4) return [];
+  const s = new Float64Array(n); // distance along the line
+  const S = new Float64Array(n); // running shoelace sum, for the area inside any stretch
+  for (let i = 1; i < n; i++) {
+    s[i] = s[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    S[i] = S[i - 1] + pts[i - 1].x * pts[i].y - pts[i].x * pts[i - 1].y;
+  }
+  const CELL = 0.05;
+  const grid = new Map();
+  const eachCell = (k, fn) => {
+    const [p, q] = [pts[k], pts[k + 1]];
+    for (let cx = Math.floor(Math.min(p.x, q.x) / CELL); cx <= Math.floor(Math.max(p.x, q.x) / CELL); cx++) {
+      for (let cy = Math.floor(Math.min(p.y, q.y) / CELL); cy <= Math.floor(Math.max(p.y, q.y) / CELL); cy++) fn(`${cx},${cy}`);
+    }
+  };
+  for (let k = 0; k < n - 1; k++) eachCell(k, (c) => (grid.get(c) || grid.set(c, []).get(c)).push(k));
+
+  const found = [];
+  const seen = new Set();
+  for (let k = 0; k < n - 1; k++) {
+    eachCell(k, (c) => {
+      for (const m of grid.get(c)) {
+        if (m <= k + 1 || seen.has(k * n + m)) continue;
+        seen.add(k * n + m);
+        const inner = s[m] - s[k + 1];
+        if (inner < LOOP_MIN * 0.8 || inner > LOOP_MAX) continue;
+        const X = crossing(pts[k], pts[k + 1], pts[m], pts[m + 1]);
+        if (!X) continue;
+        const [p, q] = [pts[k + 1], pts[m]];
+        const area = (X.x * p.y - p.x * X.y + S[m] - S[k + 1] + q.x * X.y - X.x * q.y) / 2;
+        const perim = inner + Math.hypot(p.x - X.x, p.y - X.y) + Math.hypot(q.x - X.x, q.y - X.y);
+        if (perim < LOOP_MIN || perim > LOOP_MAX || (4 * Math.PI * Math.abs(area)) / (perim * perim) < LOOP_ROUND) continue;
+        found.push({ a: k + 1, b: m, dir: Math.sign(area) });
+      }
+    });
+  }
+  // Smallest first, so a coil of loops is several loops, not one big one.
+  found.sort((u, v) => u.b - u.a - (v.b - v.a));
+  const loops = [];
+  for (const l of found) if (!loops.some((o) => l.a <= o.b && l.b >= o.a)) loops.push(l);
+  return loops.sort((u, v) => u.a - v.a);
+}
+
+// Where segments p1-p2 and q1-q2 cross, or null.
+function crossing(p1, p2, q1, q2) {
+  const rx = p2.x - p1.x;
+  const ry = p2.y - p1.y;
+  const sx = q2.x - q1.x;
+  const sy = q2.y - q1.y;
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-14) return null;
+  const t = ((q1.x - p1.x) * sy - (q1.y - p1.y) * sx) / den;
+  const u = ((q1.x - p1.x) * ry - (q1.y - p1.y) * rx) / den;
+  return t >= 0 && t < 1 && u >= 0 && u < 1 ? { x: p1.x + rx * t, y: p1.y + ry * t } : null;
+}
+
+// Tight, flat turnarounds (scribbling back and forth): the line runs one way along x, curls
+// round within a small height and comes back level. Keyed by where the turn starts (a), with
+// where it ends (b) and which way along x he was going into it. Tall turns are left alone.
+function findHairpins(pts, loops) {
+  const n = pts.length;
+  const out = new Map();
+  if (n < 5) return out;
+  const s = new Float64Array(n);
+  for (let i = 1; i < n; i++) s[i] = s[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const level = (i) => {
+    const dx = pts[i + 1].x - pts[i - 1].x;
+    const dy = pts[i + 1].y - pts[i - 1].y;
+    return Math.abs(dx) >= HAIRPIN_FLAT * Math.hypot(dx, dy);
+  };
+  const turns = []; // where the direction along x changes
+  let was = 0;
+  for (let i = 1; i < n; i++) {
+    const d = Math.sign(pts[i].x - pts[i - 1].x);
+    if (!d) continue;
+    if (was && d !== was) turns.push(i - 1);
+    was = d;
+  }
+  let lastB = 1;
+  turns.forEach((k, e) => {
+    const lo = Math.max(1, lastB, e > 0 ? turns[e - 1] : 0);
+    const hi = Math.min(n - 2, e + 1 < turns.length ? turns[e + 1] : n - 2);
+    let a = k - 1;
+    while (a > lo && s[k] - s[a] <= HAIRPIN_REACH && !level(a)) a--;
+    let b = k + 1;
+    while (b < hi && s[b] - s[k] <= HAIRPIN_REACH && !level(b)) b++;
+    if (a < 1 || b > n - 2 || !level(a) || !level(b) || Math.abs(pts[a].y - pts[b].y) > HAIRPIN_GAP) return;
+    if (loops.some((l) => a <= l.b && b >= l.a)) return;
+    const dirIn = Math.sign(pts[k].x - pts[a].x);
+    if (!dirIn || Math.sign(pts[b].x - pts[k].x) !== -dirIn) return;
+    out.set(a, { b, dirIn });
+    lastB = b;
+  });
+  return out;
+}
+
+// Unit direction on the ground (x, z), or straight along x if there's no length to go by.
+function planDir(dx, dz, fallbackX) {
+  const l = Math.hypot(dx, dz);
+  return l > 1e-6 ? { x: dx / l, z: dz / l } : { x: fallbackX, z: 0 };
+}
+
+// A hairpin's U-turn on the ground: a curve from one lane round to the next, about a half
+// circle out sideways (+z, the way the track drifts anyway), easing from one lane's height to
+// the other's and leaning in. Leaves out both ends (they're the lanes' own points).
+function hairpinPath(from, end, hIn, hOut, dirIn, spacing = 0.48) {
+  const L = (4 / 3) * HAIRPIN_R;
+  const P = [
+    [from.x, from.z],
+    [from.x + hIn.x * L, from.z + hIn.z * L],
+    [end.x - hOut.x * L, end.z - hOut.z * L],
+    [end.x, end.z],
+  ];
+  const m = Math.max(4, Math.ceil((Math.PI * HAIRPIN_R + Math.abs(end.x - from.x) + Math.abs(end.y - from.y)) / spacing));
+  const out = [];
+  for (let k = 1; k < m; k++) {
+    const u = k / m;
+    const w = [(1 - u) ** 3, 3 * u * (1 - u) ** 2, 3 * u * u * (1 - u), u ** 3];
+    const ease = u * u * (3 - 2 * u);
+    out.push({
+      x: w.reduce((sum, wk, j) => sum + wk * P[j][0], 0),
+      y: from.y + (end.y - from.y) * ease,
+      z: w.reduce((sum, wk, j) => sum + wk * P[j][1], 0),
+      bank: dirIn * HAIRPIN_BANK * Math.sin(Math.PI * u),
+      hp: 1,
+    });
   }
   return out;
 }
@@ -646,6 +839,15 @@ function boxBlur(arr, r) {
     out[i] = s / c;
   }
   return out;
+}
+
+// v (at right angles to the unit axis) turned by angle around it.
+function rotateAbout(v, axis, angle) {
+  if (!angle) return v;
+  const b = cross(axis, v);
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return norm([v[0] * c + b[0] * s, v[1] * c + b[1] * s, v[2] * c + b[2] * s]) || v;
 }
 
 function dot(a, b) {
