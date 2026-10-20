@@ -16,7 +16,6 @@ const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows whe
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
 const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the left or right side
-const EDGE_DWELL = 0.3; // seconds his finger must stay right at the edge before the view moves
 const PINCH_BEFORE = 15; // a second finger only starts a pinch while the line is shorter than this
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
@@ -67,7 +66,6 @@ export class DrawPad {
     this.zoom = 1;
     this.panX = 0; // track x at the left edge of the screen
     this.edgeHold = 0; // seconds the finger has been held against the top
-    this.edgeWait = 0; // seconds the finger has been at an edge, before it starts moving the view
     this.zoomedOut = false; // this line zoomed the view out (so it may zoom back in as it comes down)
     this.dirty = true;
     this.active = true;
@@ -220,7 +218,6 @@ export class DrawPad {
     const p = this.toTrack(e.clientX, e.clientY);
     this.strokes.push({ c: this.color, p: [p] });
     this.lastScreen = { x: e.clientX, y: e.clientY };
-    this.edgeWait = 0;
     this.zoomedOut = false;
     sound.drawStart(p.y, this.mode === 'slide');
     this.dirty = true;
@@ -234,7 +231,9 @@ export class DrawPad {
     const stroke = this.strokes[this.strokes.length - 1].p;
     const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     for (const ev of events.length ? events : [e]) {
-      if (Math.hypot(ev.clientX - this.lastScreen.x, ev.clientY - this.lastScreen.y) < 4) continue;
+      // Tiny wiggles are skipped, except at an edge, so the view moves the moment he gets there.
+      const near = Math.hypot(ev.clientX - this.lastScreen.x, ev.clientY - this.lastScreen.y) < 4;
+      if (near && !this.atEdge(ev.clientX, ev.clientY)) continue;
       this.lastScreen = { x: ev.clientX, y: ev.clientY };
       stroke.push(this.toTrack(ev.clientX, ev.clientY));
     }
@@ -267,11 +266,15 @@ export class DrawPad {
     return this.lastScreen.y <= this.edgeBand;
   }
 
+  atEdge(x, y) {
+    const band = this.edgeBand;
+    return y <= band || x >= this.w - band || x <= this.left + band;
+  }
+
   // Holding a line against an edge keeps the track going that way:
   // the top zooms out (up toward space), the sides scroll along at the same size
   // (the left side only until the station is back in view).
   // The finger stays put while the world moves under it, so the track grows that way.
-  // It only starts after he's held his finger at the edge for a moment.
   edgeMove(dt) {
     if (this.pointerId === null || !this.lastScreen) return;
     const { x, y } = this.lastScreen;
@@ -279,12 +282,7 @@ export class DrawPad {
     const right = x >= this.w - this.edgeBand;
     const left = x <= this.left + this.edgeBand && this.panX > 0;
     if (!top) this.edgeHold = 0;
-    if (!top && !right && !left) {
-      this.edgeWait = 0;
-      return;
-    }
-    this.edgeWait += dt;
-    if (this.edgeWait < EDGE_DWELL) return;
+    if (!top && !right && !left) return;
     let zoom = this.zoom;
     if (top && zoom > MIN_ZOOM) {
       this.edgeHold += dt;
