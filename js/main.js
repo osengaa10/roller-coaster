@@ -134,8 +134,62 @@ tap('look', () => {
   sound.pop();
   $('look').classList.toggle('outside', ride.toggleMode() === 'outside');
 });
-// Tap anywhere on the ride for hands up.
-$('view').addEventListener('pointerdown', () => ride.handsUp());
+// On the ride: tap anywhere for hands up, swipe to swing the camera round the train, and pinch to
+// zoom in and out.
+const SWIPE_FROM = 12; // pixels a finger moves before a tap becomes a swipe
+const view = $('view');
+const fingers = new Map(); // every finger on the ride, and where it is now
+let gesture = null; // what the fingers are doing: 'tap', 'swipe' or 'pinch'
+let last = null; // where the swiping finger was, or how far apart the pinching fingers were
+const spread = () => {
+  const [a, b] = fingers.values();
+  return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+};
+view.addEventListener('pointerdown', (e) => {
+  view.setPointerCapture(e.pointerId);
+  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (fingers.size === 1) {
+    gesture = 'tap';
+    last = { x: e.clientX, y: e.clientY };
+  } else if (fingers.size === 2) {
+    gesture = 'pinch';
+    last = spread();
+  } else ride.handsUp(); // even more fingers: more hands up
+});
+view.addEventListener('pointermove', (e) => {
+  const f = fingers.get(e.pointerId);
+  if (!f) return;
+  f.x = e.clientX;
+  f.y = e.clientY;
+  if (gesture === 'pinch') {
+    if (fingers.size < 2) return; // one finger let go of a pinch: wait for the other
+    const d = spread();
+    ride.pinch(d / last);
+    last = d;
+    return;
+  }
+  const dx = f.x - last.x;
+  const dy = f.y - last.y;
+  if (gesture === 'tap' && Math.hypot(dx, dy) < SWIPE_FROM) return;
+  gesture = 'swipe';
+  last = { x: f.x, y: f.y };
+  ride.swipe(dx / view.clientWidth, dy / view.clientHeight);
+});
+for (const type of ['pointerup', 'pointercancel']) {
+  view.addEventListener(type, (e) => {
+    if (!fingers.delete(e.pointerId)) return;
+    if (gesture === 'pinch' && fingers.size >= 2) last = spread();
+    if (fingers.size > 0) return;
+    if (gesture !== 'tap') ride.letGo();
+    else if (type === 'pointerup') ride.handsUp();
+    gesture = null;
+  });
+}
+// A mouse wheel zooms too, for trying it out on a computer.
+view.addEventListener('wheel', (e) => {
+  ride.pinch(Math.exp(-e.deltaY * 0.002));
+  ride.letGo();
+}, { passive: true });
 
 tap('pick-coaster', () => {
   sound.pop();

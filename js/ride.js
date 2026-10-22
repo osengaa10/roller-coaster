@@ -31,6 +31,9 @@ const SUN_COLOR = new THREE.Color('#fff1d6');
 const DUSK_SUN = new THREE.Color('#ffb27a');
 const UP = new THREE.Vector3(0, 1, 0);
 const SHADOW_R = 60; // meters: real shadows cover this far around the train
+const SWING_HOLD = 2.5; // seconds a swiped view stays put before drifting back behind the train
+const ZOOM_IN = 0.35; // a pinch can bring the camera this much nearer the train...
+const ZOOM_OUT = 4; // ...or take it this much further away
 
 const wrapAngle = (a) => a - Math.PI * 2 * Math.round(a / (Math.PI * 2));
 
@@ -114,6 +117,7 @@ export class Ride {
     this.chaseDir = new THREE.Vector3(1, 0, 0);
     this.chasePos = new THREE.Vector3();
     this.chaseLook = new THREE.Vector3();
+    this.resetSwing();
     this.timeScale = Number(new URLSearchParams(location.search).get('fast')) || 1; // debug: ?fast=4
 
     this.applyQuality();
@@ -248,6 +252,7 @@ export class Ride {
     this.effects.clear();
     this.drips?.replaceChildren();
     this.camUp.set(0, 1, 0);
+    this.resetSwing();
     this.applyMode(true);
     this.running = true;
     // Compile every shader the ride needs before its clock starts, so the stall (if any) happens
@@ -279,6 +284,7 @@ export class Ride {
 
   toggleMode() {
     this.mode = this.mode === 'seat' ? 'outside' : 'seat';
+    this.resetSwing();
     this.applyMode(false);
     return this.mode;
   }
@@ -322,6 +328,40 @@ export class Ride {
       this.lastYay = this.time;
       sound.yay();
     }
+  }
+
+  // Swiping in the outside view swings the camera round the train. dx, dy: how far the finger
+  // moved, as a share of the screen. Drag down to look from up high, drag sideways to go round.
+  swipe(dx, dy) {
+    if (!this.running || this.mode === 'seat') return;
+    const sw = this.swing;
+    sw.toYaw -= dx * Math.PI * 1.6;
+    sw.toPitch = Math.min(1.2, Math.max(-0.5, sw.toPitch + dy * 2));
+    sw.held = true;
+    sw.idle = 0;
+  }
+
+  // Pinching zooms in and out. scale: how much further apart his fingers are than a moment ago.
+  pinch(scale) {
+    if (!this.running || this.mode === 'seat') return;
+    const sw = this.swing;
+    // Kept as a log, so zooming in and back out again eases at the same pace.
+    sw.toZoom = Math.min(Math.log(ZOOM_OUT), Math.max(Math.log(ZOOM_IN), sw.toZoom - Math.log(scale)));
+    sw.held = true;
+    sw.idle = 0;
+  }
+
+  // Finger up: spun round three times is the same as not at all, so it drifts back the short way.
+  letGo() {
+    const sw = this.swing;
+    const turns = sw.toYaw - wrapAngle(sw.toYaw);
+    sw.toYaw -= turns;
+    sw.yaw -= turns;
+    sw.held = false;
+  }
+
+  resetSwing() {
+    this.swing = { yaw: 0, pitch: 0, zoom: 0, toYaw: 0, toPitch: 0, toZoom: 0, held: false, idle: 0 };
   }
 
   loop(now) {
@@ -713,12 +753,51 @@ export class Ride {
       this.chaseLook.lerp(p, 1 - Math.exp(-dt * 6));
     }
     // Never dip into a bowl's funnel on the way in or out of the crane shot.
-    for (const b of this.slide ? tr.bowls : []) {
-      if (Math.hypot(this.chasePos.x - b.center.x, this.chasePos.z - b.center.z) < b.R + 2.5) this.chasePos.y = Math.max(this.chasePos.y, b.rim + 2);
-    }
-    this.camera.position.copy(this.chasePos);
+    const clearBowls = (v) => {
+      for (const b of this.slide ? tr.bowls : []) {
+        if (Math.hypot(v.x - b.center.x, v.z - b.center.z) < b.R + 2.5) v.y = Math.max(v.y, b.rim + 2);
+      }
+    };
+    clearBowls(this.chasePos);
+    const eye = this.swungEye(dt);
+    clearBowls(eye);
+    this.camera.position.copy(eye);
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.chaseLook);
+  }
+
+  // Where the camera goes once he's swiped it round the train or pinched it nearer or further
+  // away. It follows his fingers closely, then
+  // a little while after he lets go it drifts back to the usual view from behind.
+  swungEye(dt) {
+    const sw = this.swing;
+    if (!sw.held && (sw.idle += dt) > SWING_HOLD) {
+      const back = 1 - Math.exp(-dt * 1.5);
+      sw.toYaw -= sw.toYaw * back;
+      sw.toPitch -= sw.toPitch * back;
+      sw.toZoom -= sw.toZoom * back;
+    }
+    const follow = 1 - Math.exp(-dt * 10);
+    sw.yaw += (sw.toYaw - sw.yaw) * follow;
+    sw.pitch += (sw.toPitch - sw.pitch) * follow;
+    sw.zoom += (sw.toZoom - sw.zoom) * follow;
+    const eye = this.chasePos.clone();
+    if (Math.abs(sw.yaw) + Math.abs(sw.pitch) + Math.abs(sw.zoom) < 1e-4) return eye;
+    const orbit = new THREE.Spherical().setFromVector3(eye.sub(this.chaseLook));
+    orbit.theta += sw.yaw;
+    // Zooming in also leans up, to look down over the cars behind at the riders up front.
+    const up = sw.pitch + Math.max(0, -sw.zoom) * 0.5;
+    // Swinging up stops short of straight overhead, and swinging down stops just above level
+    // with the train, but a view already past either limit is left alone.
+    const phi = orbit.phi - up;
+    const TOP = 0.2;
+    const LOW = Math.PI / 2 - 0.03;
+    orbit.phi = up > 0 ? Math.max(Math.min(orbit.phi, TOP), phi) : Math.min(Math.max(orbit.phi, LOW), phi);
+    // Zooming in stops before the camera bumps into the train, the same way.
+    orbit.radius = Math.max(Math.min(orbit.radius, 3), orbit.radius * Math.exp(sw.zoom));
+    eye.setFromSpherical(orbit).add(this.chaseLook);
+    eye.y = Math.max(eye.y, Math.min(this.chasePos.y, 1.5)); // and never into the ground
+    return eye;
   }
 
   sample(arr, s) {
