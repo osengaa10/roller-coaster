@@ -74,7 +74,7 @@ Graphics quality picks itself: rides start at the best tier (real sun shadows, g
 
 ## How it works
 
-- `js/draw.js`: the side-view drawing canvas (pointer events, iOS gesture blocking). `js/draw-slide.js` paints the beach version.
+- `js/draw.js`: the side-view drawing canvas (pointer events, iOS gesture blocking, the view), painted in stacked layers: the scenery and the track are only repainted when they change, and what moves (clouds, swaying trees, the waiting train's riders, running water) is painted every frame on top. `js/draw-park.js` paints the coaster's park (mountains, woods, the steel track with its spine, truss, lift chain and columns, the station and train) and `js/draw-slide.js` the beach. `js/draw-art.js` holds the shared pieces, including the pure math for the side view: which side the spine hangs on (matching the ride's loops and rolls), where the chain runs and where columns can stand without poking through other track.
 - `js/track.js`: pure math that turns the finger path into a smooth 3D track. Loops tilt slightly sideways so they don't hit themselves. Long right-to-left stretches get barrel-rolled back upright. The speed profile uses gravity on drops, plus a chain lift so it never stalls. It also picks the spots for stars, tunnels and the pond.
 - `js/slide.js`: water slide math: finding tight circles, building the 3D toilet bowl, and the run-out into the pool.
 - `js/ride.js`: runs the ride, both cameras, and the events along the track.

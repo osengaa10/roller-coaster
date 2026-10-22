@@ -42,7 +42,7 @@ const maxSpeed = (height, prof) => Math.min(100, Math.max(prof.vMax, liftSpeed(h
 const ENCLOSE_UP = 0.4; // slide steeper than this (or upside down) is a closed tube
 const ENCLOSE_PAD = 6; // meters of closed tube either side, so the tube pieces don't flicker
 const Z_DRIFT = 0.4; // sideways shift per unit of backwards travel, keeps loops from hitting themselves
-const LONG_INVERSION = 22; // meters; longer upside-down runs get rolled back upright
+export const LONG_INVERSION = 22; // meters; longer upside-down runs get rolled back upright
 // Drawn loops (the line crosses itself around a roundish shape) are ridden on the inside,
 // whichever way round he drew them. Too small and there's no room to roll in; too big and
 // it's really an out-and-back circuit, not a loop.
@@ -422,7 +422,7 @@ function rapidsStretch(flat) {
 // Drawn loops: wherever the 2D line crosses itself around a roundish shape. Returns the index
 // range between the two passes through the crossing, and which way round it goes (1 = counter-
 // clockwise, -1 = clockwise). Thin slivers (scribbled lanes crossing) and huge circuits don't count.
-function findLoops(pts) {
+export function findLoops(pts) {
   const n = pts.length;
   if (n < 4) return [];
   const s = new Float64Array(n); // distance along the line
@@ -483,7 +483,7 @@ function crossing(p1, p2, q1, q2) {
 // Tight, flat turnarounds (scribbling back and forth): the line runs one way along x, curls
 // round within a small height and comes back level. Keyed by where the turn starts (a), with
 // where it ends (b) and which way along x he was going into it. Tall turns are left alone.
-function findHairpins(pts, loops) {
+export function findHairpins(pts, loops) {
   const n = pts.length;
   const out = new Map();
   if (n < 5) return out;

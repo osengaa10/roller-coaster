@@ -1,8 +1,12 @@
 // The drawing screen: a side view of a sunny park (or a beach, for the water slide) where a
-// finger drag lays down track.
-import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, cssColor, stationFor } from './track.js';
+// finger drag lays down track. This file handles the fingers, the view and the layers; the
+// pictures are painted by draw-park.js (coaster) and draw-slide.js (water slide).
+import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, stationFor } from './track.js';
 import { shapeSlide } from './slide.js';
 import * as beach from './draw-slide.js';
+import * as park from './draw-park.js';
+import { trackShape, supportSpots2D, clearSprites, sunGlow } from './draw-art.js';
+import { quality } from './quality.js';
 import * as sound from './sound.js';
 
 const GROUND = 0.86; // ground line as a fraction of screen height
@@ -17,6 +21,8 @@ const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to t
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
 const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the left or right side
 const PINCH_BEFORE = 15; // a second finger only starts a pinch while the line is shorter than this
+const IDLE_FRAME = 30; // ms between frames while the scenery just sways (about 30 fps)
+const SUPPORTS_EVERY = 100; // ms: while a line is drawn, its columns catch up this often
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
 // The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
@@ -72,6 +78,26 @@ export class DrawPad {
     this.mode = 'coaster';
     this.sessions = {}; // per game: its strokes, undo history and view
     this.found = null; // water slide: bowls and rapids found in the drawing (cached; see slideShape)
+    // The picture is four stacked canvases, so the browser layers them for free: the back (sky,
+    // scenery, ground) and the track are only repainted when the view or the drawing changes;
+    // what moves is painted every frame on the live canvas between them and on this one, on top.
+    // `dirty` repaints the back and the track, `trackDirty` just the track.
+    const layer = (opaque = false) => {
+      const c = document.createElement('canvas');
+      c.className = 'layer';
+      c.setAttribute('aria-hidden', 'true');
+      if (opaque) c.getContext('2d', { alpha: false }); // the sky covers it all, so nothing needs blending
+      canvas.before(c);
+      return c;
+    };
+    this.back = layer(true);
+    this.mid = layer();
+    this.front = layer();
+    this.trackDirty = true;
+    this.lastFrame = 0;
+    // Gentle motion, unless the device asks for less or turns out too slow for it.
+    this.motion = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    this.lite = quality().name === 'low';
 
     this.resize();
     this.fitView();
@@ -82,18 +108,46 @@ export class DrawPad {
     canvas.addEventListener('pointercancel', (e) => this.up(e));
 
     let last = performance.now();
+    let wasActive = false;
     const tick = (t) => {
-      const dt = Math.max(0, Math.min(0.05, (t - last) / 1000));
+      const raw = (t - last) / 1000;
+      const dt = Math.max(0, Math.min(0.05, raw));
       last = t;
       if (this.active) {
+        if (!wasActive) this.frameWatch = { skip: 1, sum: 0, n: 0, spells: 0 };
         this.edgeMove(dt);
         this.settleZoom(dt);
-        if (this.dirty) this.render();
+        // Full speed while a finger is down, a gentle 30 fps while the scenery just sways.
+        const busy = this.pointerId !== null || this.pinch !== null;
+        if (!busy && this.backScale !== this.dpr) this.dirty = true; // sharpen the back again
+        if (this.dirty || this.trackDirty || (this.motion && (busy || t - this.lastFrame >= IDLE_FRAME))) {
+          this.render(t);
+          this.lastFrame = t;
+        }
+        if (this.motion) this.watchFrames(raw);
         this.animateHand(t);
       }
+      wasActive = this.active;
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
+  }
+
+  // Frame times while the scenery moves, in 3-second stretches (after a second to settle in).
+  // Two slow stretches running, not just a hiccup, and it holds still from then on.
+  watchFrames(seconds) {
+    const fw = this.frameWatch;
+    if (fw.skip > 0) {
+      fw.skip -= seconds;
+      return;
+    }
+    fw.sum += seconds;
+    fw.n++;
+    if (fw.sum < 3) return;
+    fw.spells = fw.sum / fw.n > 0.03 ? fw.spells + 1 : 0;
+    fw.sum = 0;
+    fw.n = 0;
+    if (fw.spells >= 2) this.motion = false;
   }
 
   get canGo() {
@@ -104,8 +158,13 @@ export class DrawPad {
     return stationFor(this.mode);
   }
 
+  // The drawn path (station first). Cached: lines only ever grow at the end, and undo, clear
+  // or switching games swap in a new strokes array.
   path() {
-    return pathFromStrokes(this.strokes, this.mode);
+    const s = this.strokes;
+    const key = `${this.mode}:${s.length}:${s.length ? s[s.length - 1].p.length : 0}`;
+    if (this.pathCache?.strokes !== s || this.pathCache.key !== key) this.pathCache = { strokes: s, key, pts: pathFromStrokes(s, this.mode) };
+    return this.pathCache.pts;
   }
 
   // Switch between the coaster and the water slide. Each keeps its own drawing, undo and view.
@@ -148,6 +207,15 @@ export class DrawPad {
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.dpr = dpr;
+    for (const layer of [this.back, this.mid, this.front]) {
+      layer.width = this.canvas.width;
+      layer.height = this.canvas.height;
+      layer.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    this.backScale = dpr;
+    clearSprites();
+    this.dirty = true;
     this.w = w;
     this.h = h;
     this.groundY = Math.round(h * GROUND);
@@ -167,11 +235,15 @@ export class DrawPad {
   }
 
   setView(zoom, panX) {
+    const before = [this.zoom, this.panX];
     this.zoom = Math.max(MIN_ZOOM, Math.min(1, zoom));
     const visible = (this.w - this.left) / this.unit;
     const farthest = Math.max(...this.path().map((p) => p.x));
     this.panX = Math.max(0, Math.min(panX, farthest - visible * 0.5));
-    this.dirty = true;
+    if (this.zoom !== before[0] || this.panX !== before[1]) {
+      this.dirty = true;
+      this.viewMoved = true;
+    }
   }
 
   // Zoom out just enough to show the whole drawing (used when a saved drawing loads).
@@ -220,7 +292,7 @@ export class DrawPad {
     this.lastScreen = { x: e.clientX, y: e.clientY };
     this.zoomedOut = false;
     sound.drawStart(p.y, this.mode === 'slide');
-    this.dirty = true;
+    this.trackDirty = true;
   }
 
   move(e) {
@@ -238,7 +310,7 @@ export class DrawPad {
       stroke.push(this.toTrack(ev.clientX, ev.clientY));
     }
     sound.drawMove(stroke[stroke.length - 1].y);
-    this.dirty = true;
+    this.trackDirty = true;
   }
 
   up(e) {
@@ -251,7 +323,7 @@ export class DrawPad {
     if (e.pointerId !== this.pointerId) return;
     this.pointerId = null;
     sound.drawStop();
-    this.dirty = true;
+    this.trackDirty = true;
     this.strokesChanged();
     this.onChange();
   }
@@ -298,6 +370,7 @@ export class DrawPad {
     if (Math.hypot(p.x - prev.x, p.y - prev.y) > 0.004) {
       stroke.push(p);
       sound.drawMove(p.y);
+      this.trackDirty = true;
     }
   }
 
@@ -328,6 +401,7 @@ export class DrawPad {
         this.history.pop();
       }
       this.found = null;
+      this.trackDirty = true;
       this.onChange();
     }
     const [a, b] = [...this.pointers.values()];
@@ -372,33 +446,86 @@ export class DrawPad {
     return true;
   }
 
-  render() {
-    this.dirty = false;
-    const { ctx, w, h, groundY } = this;
+  // One frame: repaint the back and track layers if they changed, then what moves behind the
+  // track (on the live layer) and in front of it (on this canvas).
+  render(t) {
+    if (this.dirty || this.trackDirty) this.paintLayers();
+    const { w, h, z, space } = this;
+    const sec = t / 1000;
+    const slide = this.mode === 'slide';
+    this.onLayer(this.mid, () => {
+      this.ctx.clearRect(0, 0, w, h);
+      if (slide) beach.paintLive(this, sec, z, space, { sway: !this.lite });
+      else {
+        park.paintSky(this, sec, z, space);
+        park.paintTrees(this, sec, z, space, { sway: !this.lite, fewer: this.lite });
+      }
+    });
+    this.ctx.clearRect(0, 0, w, h);
+    if (slide) beach.paintSlideLive(this, this.slideLive, sec);
+    else park.paintStationLive(this, sec);
+  }
 
-    // Sky, colored by height: zoomed out far enough, the top of the screen is outer space.
+  paintLayers() {
+    const pts = this.path();
+    // The ground's curve is centered on the drawing, so a line that has grown a lot moves it.
+    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
+    if (this.backCx === undefined || Math.abs(cx - this.backCx) > 0.05) this.dirty = true;
+    if (this.dirty) {
+      this.backCx = cx;
+      // While a finger is moving the view (zooming against the top, scrolling, pinching) the back
+      // is repainted every frame, so it's painted at 1x then; it's soft scenery, nobody sees.
+      const moving = this.viewMoved && (this.pointerId !== null || this.pinch !== null);
+      const scale = moving ? 1 : this.dpr;
+      if (scale !== this.backScale) {
+        this.backScale = scale;
+        this.back.width = Math.round(this.w * scale);
+        this.back.height = Math.round(this.h * scale);
+        this.back.getContext('2d', { alpha: false }).setTransform(scale, 0, 0, scale, 0, 0);
+      }
+      const { groundY, unit, panX, left } = this;
+      // Zoomed way out, the ground curves away like the Earth seen from up high.
+      this.groundAt = (sx) => groundY + (((sx - left) / unit + panX - cx) ** 2 / (2 * EARTH_R)) * unit;
+      this.onLayer(this.back, () => this.paintBack());
+    }
+    this.onLayer(this.front, () => {
+      this.ctx.clearRect(0, 0, this.w, this.h);
+      this.paintFront(pts);
+    });
+    this.dirty = false;
+    this.trackDirty = false;
+    this.viewMoved = false;
+  }
+
+  // Paint with this.ctx pointing at one of the cached layers.
+  onLayer(layer, fn) {
+    const main = this.ctx;
+    this.ctx = layer.getContext('2d');
+    try {
+      fn();
+    } finally {
+      this.ctx = main;
+    }
+  }
+
+  // Sky (by height, up into space), far scenery and the ground.
+  paintBack() {
+    const { ctx, w, h, groundY, groundAt } = this;
     const topAlt = groundY / this.unit;
     const sky = ctx.createLinearGradient(0, groundY, 0, 0);
     for (const [alt] of SKY_STOPS) if (alt < topAlt) sky.addColorStop(alt / topAlt, skyAt(alt));
     sky.addColorStop(1, skyAt(topAlt));
     ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, w, groundY);
+    ctx.fillRect(0, 0, w, h);
     const space = Math.max(0, Math.min(1, (topAlt - 4) / 20)); // 0 = all blue, 1 = deep space on screen
     if (topAlt > STARS_FROM) this.drawSpace();
-
     // Sun and clouds are scenery: sized to the screen, not the zoom.
     const z = Math.max(0.45, Math.min(1, Math.min(w, h) / 834));
+    this.z = z;
+    this.space = space;
     const slide = this.mode === 'slide';
-    if (slide) beach.paintSky(this, z, space);
-    else this.paintSunAndClouds(z, space);
+    sunGlow(ctx, w * 0.5, h * 0.15, z);
 
-    // Ground. Zoomed way out, it curves away like the Earth seen from up high.
-    const pts = this.path();
-    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
-    const groundAt = (sx) => {
-      const wx = (sx - this.left) / this.unit + this.panX;
-      return groundY + ((wx - cx) ** 2 / (2 * EARTH_R)) * this.unit;
-    };
     const edge = () => {
       ctx.beginPath();
       for (let sx = 0; sx <= w + 8; sx += 8) ctx.lineTo(sx, groundAt(sx));
@@ -410,75 +537,80 @@ export class DrawPad {
       ctx.stroke();
     }
     if (slide) beach.paintSea(this, groundAt, z);
-    else this.paintHills(groundAt, z, space);
-    edge();
-    ctx.lineTo(w, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
+    else {
+      park.paintMountains(this, groundAt, z, space);
+      park.paintHills(this, groundAt, z, space);
+    }
+    const ground = () => {
+      edge();
+      ctx.lineTo(w, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+    };
+    ground();
     const soil = ctx.createLinearGradient(0, groundY, 0, h);
-    soil.addColorStop(0, slide ? '#f6dca6' : '#62cc54');
-    soil.addColorStop(1, slide ? '#e6c083' : '#3f9e38');
+    soil.addColorStop(0, slide ? '#f6dca6' : '#66cf57');
+    soil.addColorStop(1, slide ? '#e6c083' : '#3c9a36');
     ctx.fillStyle = soil;
     ctx.fill();
+    if (!slide) {
+      // Mowed stripes across the lawn.
+      ctx.save();
+      ground();
+      ctx.clip();
+      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      for (const [a, b] of [[0.16, 0.34], [0.56, 0.76]]) ctx.fillRect(0, groundY + (h - groundY) * a, w, (h - groundY) * (b - a));
+      ctx.restore();
+    }
     edge();
     ctx.strokeStyle = slide ? '#e3bd78' : '#4bb33f';
     ctx.lineWidth = 8;
     ctx.stroke();
     this.paintGroundDetail(groundAt, z, slide);
+    if (slide) beach.paintSand(this, groundAt, z);
+  }
 
-    if (slide) {
-      beach.paintSand(this, groundAt, z);
-      beach.paintSlide(this, pts, this.slideShape(pts));
+  // The track (or slide) and the station (or tower).
+  paintFront(pts) {
+    if (this.mode === 'slide') {
+      this.slideLive = beach.paintSlide(this, pts, this.slideShape(pts));
       beach.paintTower(this);
+      return;
+    }
+    const { shape, spots } = this.trackParts(pts);
+    park.paintStationBack(this);
+    park.paintTrack(this, pts, shape, spots);
+    park.paintStationFront(this);
+  }
+
+  // Which side the spine hangs on and where the columns go. They're in drawing units, so moving
+  // the view doesn't need them again. While a line is being drawn the loops found so far are
+  // kept (new ones show up when he lifts his finger) and the columns catch up every so often.
+  trackParts(pts) {
+    const c = this.partsCache;
+    const unitKey = Math.round(Math.log(this.unit) * 8);
+    if (c && c.pts === pts && c.unitKey === unitKey) return c;
+    const drawing = this.pointerId !== null;
+    const growing = drawing && c && c.strokes === this.strokes;
+    const shape = c && c.pts === pts ? c.shape : trackShape(pts, growing ? c.shape.structure : null);
+    const now = performance.now();
+    let spots;
+    let at = now;
+    if (growing && c.unitKey === unitKey && now - c.at < SUPPORTS_EVERY) {
+      spots = c.spots;
+      at = c.at;
     } else {
-      this.drawTrack();
-      this.drawStation();
+      const size = park.trackSizes(this.k);
+      spots = supportSpots2D(pts, shape.up, {
+        every: Math.max(0.09, 22 / this.unit),
+        drop: (size.drop + size.spine / 2) / this.unit,
+        clear: Math.max(0.04, 8 / this.unit),
+        top: SUPPORT_TOP,
+        skip: (i) => pts[i].x < STATION.x1 + 0.03,
+      });
     }
-  }
-
-  paintSunAndClouds(z, space) {
-    const { ctx, w, h } = this;
-    const sx = w * 0.5;
-    const sy = h * 0.15;
-    sunGlow(ctx, sx, sy, z);
-    ctx.fillStyle = '#ffe14d';
-    ctx.strokeStyle = '#ffe14d';
-    ctx.lineWidth = 5 * z;
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 10; i++) {
-      const a = (i / 10) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(sx + Math.cos(a) * 46 * z, sy + Math.sin(a) * 46 * z);
-      ctx.lineTo(sx + Math.cos(a) * 62 * z, sy + Math.sin(a) * 62 * z);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.arc(sx, sy, 36 * z, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Clouds belong low in the sky, so they fade away as space comes into view.
-    for (const [cx, cy, s] of [[0.18, 0.22, 1], [0.78, 0.3, 1.3], [0.35, 0.45, 0.8]]) {
-      cloud(ctx, cx * w, cy * h, s * z, 0.9 * (1 - space));
-    }
-  }
-
-  // Rolling hills far away, pale with haze, scrolling slower than the drawing.
-  paintHills(groundAt, z, space) {
-    const { ctx, w } = this;
-    if (space >= 1) return;
-    const shift = this.panX * this.unit * 0.3;
-    for (const [height, color, freq, seed] of [[46, `rgba(150,200,170,${0.8 * (1 - space)})`, 0.006, 1.7], [28, `rgba(110,185,120,${0.9 * (1 - space)})`, 0.011, 4.1]]) {
-      ctx.beginPath();
-      for (let sx = 0; sx <= w + 8; sx += 8) {
-        const t = (sx + shift) * freq;
-        const bump = 0.55 + 0.3 * Math.sin(t + seed) + 0.15 * Math.sin(t * 2.3 + seed * 3);
-        ctx.lineTo(sx, groundAt(sx) - height * z * bump);
-      }
-      for (let sx = w + 8; sx >= 0; sx -= 8) ctx.lineTo(sx, groundAt(sx) + 2);
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.fill();
-    }
+    this.partsCache = { pts, strokes: this.strokes, unitKey, shape, spots, at };
+    return this.partsCache;
   }
 
   // Grass tufts and flowers (or, on the beach, specks and pebbles) just below the ground line.
@@ -567,142 +699,6 @@ export class DrawPad {
     }
   }
 
-  drawTrack() {
-    const { ctx, groundY, k } = this;
-    const pts = this.path().map((p) => ({ ...this.toScreen(p), c: p.c, high: p.y > SUPPORT_TOP }));
-
-    // Support poles
-    ctx.strokeStyle = '#b9c3d6';
-    ctx.lineWidth = Math.max(2, 5 * k);
-    ctx.lineCap = 'butt';
-    let acc = 0;
-    for (let i = 1; i < pts.length; i++) {
-      acc += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      if (acc > Math.max(14, 34 * k) && groundY - pts[i].y > 20 * k && !pts[i].high) {
-        acc = 0;
-        ctx.beginPath();
-        ctx.moveTo(pts[i].x, pts[i].y + 8 * k);
-        ctx.lineTo(pts[i].x, groundY + 4);
-        ctx.stroke();
-      }
-    }
-
-    const path = () => {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const mx = (pts[i].x + pts[i + 1].x) / 2;
-        const my = (pts[i].y + pts[i + 1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
-      }
-      const last = pts[pts.length - 1];
-      ctx.lineTo(last.x, last.y);
-    };
-
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    // A soft shadow under the track, as if the sun were up and to the left.
-    ctx.save();
-    ctx.translate(3 * k, 6 * k);
-    path();
-    ctx.strokeStyle = 'rgba(20,40,60,0.13)';
-    ctx.lineWidth = Math.max(8, 22 * k);
-    ctx.stroke();
-    ctx.restore();
-    // Ties
-    path();
-    ctx.setLineDash([Math.max(2, 6 * k), Math.max(3, 8 * k)]);
-    ctx.lineCap = 'butt';
-    ctx.strokeStyle = '#7a4a2a';
-    ctx.lineWidth = Math.max(7, 20 * k);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineCap = 'round';
-    // Rail, in each stroke's crayon color. Same-colored pieces are batched into one path.
-    ctx.lineWidth = Math.max(3, 8 * k);
-    let along = 0;
-    let color = null;
-    const mid = (i) => ({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
-    for (let i = 1; i < pts.length; i++) {
-      along += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) / this.unit;
-      const c = cssColor(pts[i].c, along);
-      if (c !== color) {
-        if (color) ctx.stroke();
-        color = c;
-        ctx.strokeStyle = c;
-        ctx.beginPath();
-        const from = i === 1 ? pts[0] : mid(i - 1);
-        ctx.moveTo(from.x, from.y);
-      }
-      if (i < pts.length - 1) {
-        const to = mid(i);
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, to.x, to.y);
-      } else ctx.lineTo(pts[i].x, pts[i].y);
-    }
-    if (color) ctx.stroke();
-    path();
-    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-    ctx.lineWidth = Math.max(1, 2 * k);
-    ctx.stroke();
-  }
-
-  drawStation() {
-    const { ctx, k } = this;
-    const a = this.toScreen({ x: STATION.x0, y: STATION.y });
-    const b = this.toScreen({ x: STATION.x1, y: STATION.y });
-    const len = b.x - a.x;
-
-    // Roof on posts
-    ctx.fillStyle = '#8a5a3c';
-    ctx.fillRect(a.x + 4 * k, a.y - 70 * k, 6 * k, 70 * k);
-    ctx.fillRect(b.x - 10 * k, a.y - 70 * k, 6 * k, 70 * k);
-    ctx.fillStyle = '#ff8c42';
-    ctx.beginPath();
-    ctx.moveTo(a.x - 10 * k, a.y - 66 * k);
-    ctx.lineTo(a.x + len / 2, a.y - 100 * k);
-    ctx.lineTo(b.x + 10 * k, a.y - 66 * k);
-    ctx.closePath();
-    ctx.fill();
-    // Shingle lines across the roof, clipped to it.
-    ctx.save();
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(160,70,20,0.35)';
-    ctx.lineWidth = Math.max(1, 2 * k);
-    ctx.beginPath();
-    for (let y = a.y - 96 * k; y < a.y - 66 * k; y += 8 * k) {
-      ctx.moveTo(a.x - 12 * k, y);
-      ctx.lineTo(b.x + 12 * k, y);
-    }
-    ctx.stroke();
-    ctx.restore();
-    // Platform, with planks.
-    ctx.fillStyle = '#d9a066';
-    ctx.fillRect(a.x - 6 * k, a.y + 10 * k, len + 12 * k, this.groundY - a.y - 10 * k);
-    ctx.strokeStyle = 'rgba(120,70,30,0.35)';
-    ctx.lineWidth = Math.max(1, 1.5 * k);
-    ctx.beginPath();
-    for (let y = a.y + 16 * k; y < this.groundY; y += 7 * k) {
-      ctx.moveTo(a.x - 6 * k, y);
-      ctx.lineTo(b.x + 6 * k, y);
-    }
-    ctx.stroke();
-
-    // Little train waiting at the station
-    const colors = ['#ffd23f', '#3bceac', '#ee4266'];
-    const carW = (len - 22 * k) / 3;
-    for (let i = 0; i < 3; i++) {
-      const x = a.x + 8 * k + i * (carW + 3 * k);
-      ctx.fillStyle = colors[i];
-      roundRect(ctx, x, a.y - 24 * k, carW, 20 * k, 6 * k);
-      ctx.fill();
-      ctx.fillStyle = '#333';
-      ctx.beginPath();
-      ctx.arc(x + 7 * k, a.y - 3 * k, 4 * k, 0, Math.PI * 2);
-      ctx.arc(x + carW - 7 * k, a.y - 3 * k, 4 * k, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
   // A pointing hand that shows how to draw a hill, only while the track is empty.
   animateHand(t) {
     const show = this.strokes.length === 0 && this.pointers.size === 0;
@@ -719,38 +715,4 @@ export class DrawPad {
     const size = this.hand.offsetHeight || 64;
     this.hand.style.transform = `translate(${p.x - size * 0.47}px, ${p.y - size * 0.1}px)`;
   }
-}
-
-// A puffy cloud: a blue-grey underside peeking out below the white top.
-export function cloud(ctx, x, y, s, alpha = 1) {
-  const puffs = (dy) => {
-    ctx.beginPath();
-    ctx.arc(x, y + dy, 26 * s, 0, Math.PI * 2);
-    ctx.arc(x + 30 * s, y - 12 * s + dy, 32 * s, 0, Math.PI * 2);
-    ctx.arc(x + 62 * s, y + dy, 24 * s, 0, Math.PI * 2);
-    ctx.fill();
-  };
-  ctx.fillStyle = `rgba(196,212,234,${alpha})`;
-  puffs(5 * s);
-  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-  puffs(0);
-}
-
-// Warm light glowing round the sun.
-export function sunGlow(ctx, x, y, z) {
-  const glow = ctx.createRadialGradient(x, y, 30 * z, x, y, 150 * z);
-  glow.addColorStop(0, 'rgba(255,244,190,0.55)');
-  glow.addColorStop(1, 'rgba(255,244,190,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(x - 150 * z, y - 150 * z, 300 * z, 300 * z);
-}
-
-export function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
 }

@@ -45,6 +45,17 @@ canvas {
   touch-action: none;
 }
 
+/* The drawing screen is painted in stacked layers (see js/draw.js); the top one takes the touches. */
+#pad {
+  position: relative;
+}
+canvas.layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
 #hand {
   position: absolute;
   left: 0;
