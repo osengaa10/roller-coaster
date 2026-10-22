@@ -5,7 +5,7 @@ import { makeClouds, makeMountains, makeLandscape, getGrassTexture, merge } from
 import { concreteTexture, plankTexture, gratingTexture, stoneTexture, glowTexture } from './textures.js';
 import { makeWater } from './water.js';
 
-const RAIL_GAP = 0.6; // half distance between rails
+export const RAIL_GAP = 0.6; // half distance between rails
 const SPINE_DROP = 0.6; // spine center below the rails
 const HIGH = 300; // meters: above this, track geometry is built with less detail
 const CATWALK = 1.4; // meters from the middle of the track to the catwalk's inner edge
@@ -82,7 +82,7 @@ export function makeTrackWorld(tr, eye) {
   g.add(new THREE.Mesh(tube(geoIds, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 16, colorAt: paint }), steel));
   const updates = [];
 
-  // Cross-ties every meter: a crossbar under the rails with a clamp round each rail and a plate
+  // Cross-ties every meter: a crossbar between the rails with a clamp on each rail and a plate
   // down to the spine, braced down to the spine.
   const m = new THREE.Matrix4();
   const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8);
@@ -101,7 +101,7 @@ export function makeTrackWorld(tr, eye) {
     bars.setColorAt(k, col);
     const spine = p.clone().addScaledVector(u, -SPINE_DROP);
     [-1, 1].forEach((s, j) => {
-      braces.setMatrixAt(k * 2 + j, beam(m, spine, p.clone().addScaledVector(sd, s * RAIL_GAP).addScaledVector(u, -0.15), 0.055));
+      braces.setMatrixAt(k * 2 + j, beam(m, spine, p.clone().addScaledVector(sd, s * (RAIL_GAP - 0.17)).addScaledVector(u, -0.15), 0.055));
       braces.setColorAt(k * 2 + j, col);
     });
   });
@@ -415,12 +415,13 @@ export function makeTrackWorld(tr, eye) {
 }
 
 // One cross-tie in the track's frame (x across, y up, origin between the rails): the crossbar,
-// a clamp under each rail and a plate down to the spine.
+// a clamp on the inner side of each rail (leaving the underside clear for the train's up-stop
+// wheels) and a plate down to the spine.
 function tieGeometry() {
   return merge([
-    new THREE.BoxGeometry(1.4, 0.08, 0.14).translate(0, -0.15, 0),
-    new THREE.BoxGeometry(0.2, 0.13, 0.2).translate(-RAIL_GAP, -0.09, 0),
-    new THREE.BoxGeometry(0.2, 0.13, 0.2).translate(RAIL_GAP, -0.09, 0),
+    new THREE.BoxGeometry(0.9, 0.08, 0.14).translate(0, -0.15, 0),
+    new THREE.BoxGeometry(0.12, 0.14, 0.2).translate(-RAIL_GAP + 0.1, -0.06, 0),
+    new THREE.BoxGeometry(0.12, 0.14, 0.2).translate(RAIL_GAP - 0.1, -0.06, 0),
     new THREE.BoxGeometry(0.06, 0.24, 0.12).translate(0, -0.29, 0),
   ]);
 }

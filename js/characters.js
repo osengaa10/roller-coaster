@@ -2,27 +2,40 @@
 import * as THREE from 'three';
 import { quality } from './quality.js';
 import { numberTexture } from './textures.js';
+import { merge } from './nature.js';
 
 // Soft, slightly fuzzy material for skin, fur and clothes: a gentle light round the edges (rim
 // light) makes the riders stand out against the busy world behind them.
+function rimMaterial(options) {
+  const m = new THREE.MeshStandardMaterial({ roughness: 0.72, metalness: 0, ...options });
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      'outgoingLight += vec3(0.32, 0.31, 0.3) * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);\n#include <opaque_fragment>',
+    );
+  };
+  m.customProgramCacheKey = () => 'rim';
+  m.userData.rim = true;
+  return m;
+}
 const mats = new Map();
 export const mat = (color, roughness = 0.72) => {
   const key = color + roughness;
-  if (!mats.has(key)) {
-    const m = new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
-    m.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <opaque_fragment>',
-        'outgoingLight += vec3(0.32, 0.31, 0.3) * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);\n#include <opaque_fragment>',
-      );
-    };
-    m.customProgramCacheKey = () => 'rim';
-    mats.set(key, m);
-  }
+  if (!mats.has(key)) mats.set(key, rimMaterial({ color, roughness }));
   return mats.get(key);
 };
+// All of a rider's rim-lit parts merged into one mesh, each part keeping its color per vertex.
+const rimColors = rimMaterial({ vertexColors: true });
 const glossy = new THREE.MeshStandardMaterial({ color: '#141418', roughness: 0.08, metalness: 0 });
 const SPHERE = new THREE.SphereGeometry(1, 32, 24);
+const SMALL_SPHERE = new THREE.SphereGeometry(1, 14, 10); // eyes, cheeks and other little bits
+// A rounded pad along y, `length` long overall, ends included.
+const pills = new Map();
+const pill = (r, length) => {
+  const key = `${r},${length}`;
+  if (!pills.has(key)) pills.set(key, new THREE.CapsuleGeometry(r, Math.max(0, length - 2 * r), 4, 12));
+  return pills.get(key);
+};
 const CYL = new THREE.CylinderGeometry(1, 1, 1, 10);
 const CONE = new THREE.ConeGeometry(1, 1, 8);
 const BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -33,21 +46,51 @@ function part(geo, color, [x, y, z], [sx, sy, sz] = [1, 1, 1]) {
   m.scale.set(sx, sy, sz);
   return m;
 }
-const ball = (color, p, r, s = [1, 1, 1]) => part(SPHERE, color, p, [r * s[0], r * s[1], r * s[2]]);
+const ball = (color, p, r, s = [1, 1, 1]) => part(r * Math.max(...s) < 0.12 ? SMALL_SPHERE : SPHERE, color, p, [r * s[0], r * s[1], r * s[2]]);
+
+// Riders are built from dozens of little balls and sticks. Merge each group's own meshes (the
+// body, the head, each arm, each blinking eye) into one vertex-colored mesh, plus one per special
+// material such as the glossy eyes, so a rider costs a few draw calls instead of forty. The
+// groups stay, so arms still wave and eyes still blink.
+function bake(root) {
+  const groups = [];
+  root.traverse((o) => !o.isMesh && groups.push(o));
+  for (const g of groups) {
+    const meshes = g.children.filter((c) => c.isMesh);
+    if (meshes.length < 2) continue;
+    const buckets = new Map();
+    for (const m of meshes) {
+      m.updateMatrix();
+      const geo = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrix);
+      let material = m.material;
+      if (material.userData.rim) {
+        const c = material.color;
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 3).map((_, k) => [c.r, c.g, c.b][k % 3]), 3));
+        material = rimColors;
+      }
+      if (!buckets.has(material)) buckets.set(material, []);
+      buckets.get(material).push(geo);
+      g.remove(m);
+    }
+    for (const [material, geos] of buckets) g.add(new THREE.Mesh(merge(geos), material));
+  }
+  return root;
+}
 
 // Painted metal and chrome for the train.
 const paints = new Map();
-const paint = (color, shininess = 80) => {
+export const paint = (color, shininess = 80) => {
   const key = color + shininess;
   if (!paints.has(key)) paints.set(key, new THREE.MeshStandardMaterial({ color, metalness: 0.15, roughness: Math.max(0.15, 1 - shininess / 110) }));
   return paints.get(key);
 };
-const CHROME = '#d5dbe2';
-const chrome = new THREE.MeshStandardMaterial({ color: '#eef2f6', metalness: 1, roughness: 0.18 });
-const darkSteel = new THREE.MeshStandardMaterial({ color: '#3d3d45', metalness: 0.7, roughness: 0.45 });
+export const chrome = new THREE.MeshStandardMaterial({ color: '#eef2f6', metalness: 1, roughness: 0.18 });
+export const darkSteel = new THREE.MeshStandardMaterial({ color: '#3d3d45', metalness: 0.7, roughness: 0.45 });
 const vinyl = new THREE.MeshStandardMaterial({ color: '#2b2d42', roughness: 0.45 });
 const cushion = new THREE.MeshStandardMaterial({ color: '#3d405b', roughness: 0.6 });
-const tire = new THREE.MeshStandardMaterial({ color: '#202024', roughness: 0.85 });
+const headlamp = new THREE.MeshStandardMaterial({ color: '#fffbe0', emissive: '#ffe9a0', emissiveIntensity: 0.8, roughness: 0.1 });
+const taillamp = new THREE.MeshStandardMaterial({ color: '#ff4d5e', emissive: '#ff2030', emissiveIntensity: 0.7, roughness: 0.15 });
+const badge = new THREE.MeshStandardMaterial({ color: '#ffd23f', metalness: 0.8, roughness: 0.25 });
 // Glossy car paint: a clear coat over the color on devices that can afford it.
 const carPaints = new Map();
 const carPaint = (color) => {
@@ -61,11 +104,30 @@ const carPaint = (color) => {
   }
   return carPaints.get(color);
 };
-function piece(geo, material, [x, y, z], [sx, sy, sz] = [1, 1, 1]) {
-  const m = new THREE.Mesh(geo, material);
-  m.position.set(x, y, z);
-  m.scale.set(sx, sy, sz);
-  return m;
+
+// Gathers parts that never move relative to each other and merges the ones sharing a material
+// into one mesh, so a whole car costs a handful of draw calls instead of dozens.
+export class Parts {
+  constructor() {
+    this.byMaterial = new Map();
+  }
+
+  // Scale, then rotate (Euler angles), then move: the same as setting a mesh's scale, rotation
+  // and position.
+  add(material, geo, [x, y, z], [sx, sy, sz] = [1, 1, 1], [rx, ry, rz] = [0, 0, 0]) {
+    const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(sx, sy, sz));
+    return this.addMatrix(material, geo, m);
+  }
+
+  addMatrix(material, geo, m) {
+    if (!this.byMaterial.has(material)) this.byMaterial.set(material, []);
+    this.byMaterial.get(material).push((geo.index ? geo.toNonIndexed() : geo.clone()).applyMatrix4(m));
+    return this;
+  }
+
+  build() {
+    return [...this.byMaterial].map(([material, geos]) => new THREE.Mesh(merge(geos), material));
+  }
 }
 
 // Side profile of a car body (z forward, y up), extruded across the car's width.
@@ -150,90 +212,87 @@ function smallStar() {
   return new THREE.ExtrudeGeometry(shape, { depth: 0.04, bevelEnabled: false });
 }
 
-// A coaster car. Local +z is forward, +y is up, the origin sits on the track between the rails.
-// seats: x of each seat; the front car gets headlights, a bumper and a star badge. number: the
-// car's number on a plate on each side.
-export function makeTrainCar(color, front = false, { width = 1.9, seats = [0.45, -0.45], seatBacks = true, lapBars = seats, wheels = true, number = null } = {}) {
+// A coaster car's body and seats. Local +z is forward, +y is up, the origin sits on the track
+// between the rails (the chassis, wheels and couplers are added by makeTrain in train.js).
+// seats: x of each seat; the front car gets headlights, a bumper and a star badge, the back car
+// tail lights. number: the car's number on a plate on each side.
+export function makeTrainCar(color, front = false, { width = 1.9, seats = [0.45, -0.45], seatBacks = true, lapBars = seats, number = null, back = false } = {}) {
   const car = new THREE.Group();
   car.add(new THREE.Mesh(bodyGeometry(width), carPaint(color)));
+  const parts = new Parts();
+  const plates = new Parts();
+  const plate = new THREE.CircleGeometry(0.17, 20);
   // Racing stripe down each side, and the car number.
   for (const sx of [-1, 1]) {
-    car.add(piece(BOX, paint('#ffffff', 60), [sx * (width / 2 + 0.01), 0.68, 0.05], [0.03, 0.1, 2.1]));
-    if (number) {
-      const plate = new THREE.Mesh(new THREE.CircleGeometry(0.17, 20), new THREE.MeshStandardMaterial({ map: numberTexture(number), roughness: 0.5 }));
-      plate.position.set(sx * (width / 2 + 0.035), 0.86, -0.75);
-      plate.rotation.y = sx * Math.PI / 2;
-      car.add(plate);
-    }
+    parts.add(paint('#ffffff', 60), BOX, [sx * (width / 2 + 0.01), 0.68, 0.05], [0.03, 0.1, 2.1]);
+    if (number) plates.add(numberMaterial(number), plate, [sx * (width / 2 + 0.035), 0.86, -0.75], [1, 1, 1], [0, sx * Math.PI / 2, 0]);
   }
   // Chrome trim along the cockpit edge.
-  car.add(piece(CYL, chrome, [0, 1.1, 0.6], [0.04, width - 0.1, 0.04]).rotateZ(Math.PI / 2));
+  parts.add(chrome, CYL, [0, 1.1, 0.6], [0.04, width - 0.1, 0.04], [0, 0, Math.PI / 2]);
+
+  // The cockpit: a padded roll along each side and across the dash, and a padded divider
+  // between the seats.
+  const ROLL = 0.07;
+  for (const sx of [-1, 1]) {
+    parts.add(carPaint(color), BOX, [sx * (width / 2 - 0.08), 0.91, -0.18], [0.1, 0.14, 1.12]);
+    parts.add(vinyl, pill(ROLL, 1.12), [sx * (width / 2 - 0.08), 0.99, -0.18], [1, 1, 1], [Math.PI / 2, 0, 0]);
+  }
+  parts.add(vinyl, pill(ROLL, width - 0.4), [0, 1.0, 0.47], [1, 1, 1], [0, 0, Math.PI / 2]);
+  if (seats.length > 1) {
+    const mid = (seats[0] + seats[1]) / 2;
+    parts.add(vinyl, BOX, [mid, 0.92, -0.25], [0.1, 0.14, 0.8]).add(cushion, pill(0.06, 0.8), [mid, 0.99, -0.25], [1, 1, 1], [Math.PI / 2, 0, 0]);
+  }
 
   for (const x of seats) {
     if (seatBacks) {
-      const back = piece(BOX, vinyl, [x, 1.12, -0.66], [0.72, 0.62, 0.14]);
-      back.rotation.x = -0.12;
+      // A fiberglass shell in the car's color, with tuck-and-roll pads in front of it.
+      parts.add(carPaint(color), BOX, [x, 1.12, -0.71], [0.76, 0.66, 0.07], [-0.12, 0, 0]);
+      for (let k = 0; k < 4; k++) parts.add(vinyl, pill(0.078, 0.56), [x + (k - 1.5) * 0.165, 1.1, -0.64], [1, 1, 0.75], [-0.12, 0, 0]);
       // Padded headrest, with a seam of piping round it.
-      car.add(back, piece(SPHERE, vinyl, [x, 1.5, -0.71], [0.3, 0.17, 0.09]), piece(SPHERE, cushion, [x, 1.5, -0.7], [0.31, 0.04, 0.095]));
+      parts.add(vinyl, SPHERE, [x, 1.5, -0.71], [0.3, 0.17, 0.09]).add(cushion, SPHERE, [x, 1.5, -0.7], [0.31, 0.04, 0.095]);
+      // A grab bar on the back of the seat for whoever sits behind.
+      parts.add(chrome, CYL, [x, 1.3, -0.84], [0.03, 0.5, 0.03], [0, 0, Math.PI / 2]);
+      for (const sx of [-1, 1]) parts.add(chrome, CYL, [x + sx * 0.24, 1.3, -0.79], [0.025, 0.11, 0.025], [Math.PI / 2, 0, 0]);
     }
-    car.add(piece(BOX, cushion, [x, 0.87, -0.25], [0.7, 0.07, 0.83]), piece(CYL, cushion, [x, 0.88, 0.16], [0.07, 0.68, 0.07]).rotateZ(Math.PI / 2));
+    // The seat: pleated pads running front to back, and a roll along the front edge.
+    parts.add(vinyl, BOX, [x, 0.86, -0.25], [0.7, 0.04, 0.83]);
+    for (let k = 0; k < 4; k++) parts.add(cushion, pill(0.075, 0.78), [x + (k - 1.5) * 0.165, 0.89, -0.27], [1, 1, 0.6], [Math.PI / 2, 0, 0]);
+    parts.add(cushion, CYL, [x, 0.88, 0.16], [0.07, 0.68, 0.07], [0, 0, Math.PI / 2]);
   }
-  for (const x of lapBars) {
-    const bar = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.06, 10, 24, Math.PI), paint('#ffd23f'));
-    // Padded bar standing up in front of the rider, leaning back toward them.
-    bar.position.set(x, 0.86, 0.15);
-    bar.rotation.set(-0.35, 0, 0);
-    car.add(bar);
-  }
+  // Padded bar standing up in front of each rider, leaning back toward them.
+  const lapBar = new THREE.TorusGeometry(0.3, 0.06, 10, 24, Math.PI);
+  for (const x of lapBars) parts.add(paint('#ffd23f'), lapBar, [x, 0.86, 0.15], [1, 1, 1], [-0.35, 0, 0]);
 
-  if (wheels) {
-    // Chassis, then a wheel assembly hugging each rail at front and back:
-    // a road wheel on top, an up-stop wheel underneath and a guide wheel at the side.
-    car.add(piece(BOX, darkSteel, [0, 0.44, 0], [1.5, 0.14, 2.1]));
-    for (const z of [-0.8, 0.8]) {
-      for (const sx of [-1, 1]) {
-        const x = sx * 0.6;
-        car.add(piece(BOX, darkSteel, [x + sx * 0.3, 0.05, z], [0.1, 0.75, 0.42]));
-        car.add(piece(BOX, darkSteel, [x + sx * 0.15, 0.42, z], [0.35, 0.08, 0.42]));
-        for (const [y, r] of [[0.25, 0.15], [-0.24, 0.1]]) {
-          const wheel = new THREE.Group();
-          wheel.add(piece(CYL, tire, [0, 0, 0], [r, 0.1, r]), piece(CYL, chrome, [0, 0, 0], [r * 0.55, 0.11, r * 0.55]));
-          wheel.position.set(x, y, z);
-          wheel.rotation.z = Math.PI / 2;
-          car.add(wheel);
-        }
-        car.add(piece(CYL, tire, [x + sx * 0.2, 0, z], [0.1, 0.1, 0.1]), piece(CYL, chrome, [x + sx * 0.2, 0, z], [0.055, 0.11, 0.055]));
-      }
-    }
-    // Tow bar to the car behind.
-    const hitch = piece(CYL, darkSteel, [0, 0.45, -1.3], [0.06, 0.4, 0.06]);
-    hitch.rotation.x = Math.PI / 2;
-    car.add(hitch);
-  }
-
+  const lampRim = new THREE.TorusGeometry(0.13, 0.025, 6, 20);
   if (front) {
     for (const sx of [-1, 1]) {
-      const lamp = new THREE.Mesh(SPHERE, new THREE.MeshStandardMaterial({ color: '#fffbe0', emissive: '#ffe9a0', emissiveIntensity: 0.8, roughness: 0.1 }));
-      lamp.position.set(sx * (width / 2 - 0.35), 0.86, 1.3);
-      lamp.scale.set(0.13, 0.13, 0.06);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.025, 6, 20), chrome);
-      rim.position.set(sx * (width / 2 - 0.35), 0.86, 1.31);
-      car.add(lamp, rim);
+      parts.add(headlamp, SPHERE, [sx * (width / 2 - 0.35), 0.86, 1.3], [0.13, 0.13, 0.06]);
+      parts.add(chrome, lampRim, [sx * (width / 2 - 0.35), 0.86, 1.31]);
     }
-    const bumper = piece(CYL, chrome, [0, 0.56, 1.33], [0.06, width - 0.3, 0.06]);
-    bumper.rotation.z = Math.PI / 2;
-    const star = new THREE.Mesh(smallStar(), new THREE.MeshStandardMaterial({ color: '#ffd23f', metalness: 0.8, roughness: 0.25 }));
-    star.position.set(0, 0.95, 1.29);
-    car.add(bumper, star);
+    parts.add(chrome, CYL, [0, 0.56, 1.33], [0.06, width - 0.3, 0.06], [0, 0, Math.PI / 2]);
+    parts.add(badge, smallStar(), [0, 0.95, 1.29]);
   }
+  if (back) {
+    for (const sx of [-1, 1]) {
+      parts.add(taillamp, SPHERE, [sx * (width / 2 - 0.3), 0.8, -1.2], [0.09, 0.09, 0.05]);
+      parts.add(chrome, lampRim, [sx * (width / 2 - 0.3), 0.8, -1.21], [0.7, 0.7, 0.7], [0, Math.PI, 0]);
+    }
+  }
+  car.add(...parts.build(), ...plates.build());
   return car;
 }
+
+const numberMaterials = new Map();
+const numberMaterial = (n) => {
+  if (!numberMaterials.has(n)) numberMaterials.set(n, new THREE.MeshStandardMaterial({ map: numberTexture(n), roughness: 0.5 }));
+  return numberMaterials.get(n);
+};
 
 // The car you sit in, seen from the front seat (child of the camera). It's a wide two-seater
 // set a little low so the cowl doesn't block the view; his friend sits in the right seat.
 export const FRIEND_SEAT = { x: 1.25, y: -1.32, z: -1.4 };
 export function makeSeatCar() {
-  const car = makeTrainCar('#ee4266', true, { width: 3.1, seats: [0.55, -0.7], seatBacks: false, lapBars: [0.55], wheels: false });
+  const car = makeTrainCar('#ee4266', true, { width: 3.1, seats: [0.55, -0.7], seatBacks: false, lapBars: [0.55] });
   car.rotation.y = Math.PI; // car forward (+z) -> camera forward (-z)
   car.position.set(0.55, -1.9, -1.5);
   return car;
@@ -293,7 +352,9 @@ export function makeSeatRaft(eye) {
 
 // Riders: him and the animal friends. Built facing +z, sitting at y = 0.
 const RIDERS = {
-  kid: { body: '#3a86ff', head: '#f2c6a0', paw: '#f2c6a0' },
+  kid: { body: '#3a86ff', head: '#f2c6a0', paw: '#f2c6a0', hair: '#6b3e26', brow: '#5a321e' },
+  girl: { body: '#ff70a6', head: '#e0ac69', paw: '#e0ac69', hair: '#3b2416', brow: '#2e1b10', style: 'pigtails', bow: '#ffd23f' },
+  pal: { body: '#06d6a0', head: '#8d5524', paw: '#8d5524', hair: '#1f1a17', brow: '#1f1a17', style: 'curls' },
   bear: { body: '#a0522d', head: '#a0522d', paw: '#7a3e1d', snout: '#deb887' },
   bunny: { body: '#f5f5f5', head: '#f5f5f5', paw: '#ffffff', snout: '#ffffff', nose: '#ff8fab' },
   panda: { body: '#222222', head: '#f8f8f8', paw: '#222222', snout: '#ffffff' },
@@ -301,6 +362,7 @@ const RIDERS = {
   dino: { body: '#9b5de5', head: '#9b5de5', paw: '#7b3fc5', snout: '#c8a2f5' },
 };
 export const FRIENDS = ['bear', 'bunny', 'panda', 'frog', 'dino'];
+export const PEOPLE = ['girl', 'pal']; // other kids, who ride in the cars behind
 
 export function makeRider(kind) {
   const k = RIDERS[kind];
@@ -342,20 +404,41 @@ export function makeRider(kind) {
   };
 
   let goggles = null;
-  if (kind === 'kid') {
-    head.add(ball('#6b3e26', [0, 0.08, -0.02], 0.3, [1, 0.8, 1])); // hair
-    // A few tufts sticking up, and a fringe over the forehead.
-    for (const [x, y, z, r] of [[0.05, 0.3, -0.02, 0.07], [-0.07, 0.29, 0.03, 0.06], [0.0, 0.27, 0.12, 0.06], [0.12, 0.24, 0.08, 0.055]]) head.add(ball('#6b3e26', [x, y, z], r, [1, 1.3, 1]));
+  if (k.hair) {
+    // People: a cap of hair, a face in front of it, then the hairdo.
+    head.add(ball(k.hair, [0, 0.08, -0.02], 0.3, [1, 0.8, 1]));
     head.add(ball(k.head, [0, -0.01, 0.06], 0.26));
-    head.add(ball('#6b3e26', [0, 0.17, 0.17], 0.13, [1.4, 0.45, 0.7]));
+    if (k.style === 'curls') {
+      // A round puff of curls all over.
+      for (let n = 0; n < 14; n++) {
+        const a = (n / 14) * Math.PI * 2;
+        const up = n % 2 ? 0.2 : 0.27;
+        head.add(ball(k.hair, [Math.cos(a) * 0.2, up, Math.sin(a) * 0.18 - 0.04], 0.09));
+      }
+      head.add(ball(k.hair, [0, 0.31, -0.03], 0.13));
+    } else {
+      // A few tufts sticking up, and a fringe over the forehead.
+      for (const [x, y, z, r] of [[0.05, 0.3, -0.02, 0.07], [-0.07, 0.29, 0.03, 0.06], [0.0, 0.27, 0.12, 0.06], [0.12, 0.24, 0.08, 0.055]]) head.add(ball(k.hair, [x, y, z], r, [1, 1.3, 1]));
+      head.add(ball(k.hair, [0, 0.17, 0.17], 0.13, [1.4, 0.45, 0.7]));
+    }
+    if (k.style === 'pigtails') {
+      // Bunches over each ear, tied with a bow.
+      for (const s of [-1, 1]) {
+        head.add(ball(k.hair, [s * 0.33, 0.02, -0.06], 0.11, [0.9, 1.2, 0.9]));
+        for (const b of [-1, 1]) head.add(ball(k.bow, [s * 0.36, 0.15, -0.06 + b * 0.06], 0.06, [0.6, 0.7, 1]));
+        head.add(ball(k.bow, [s * 0.37, 0.15, -0.06], 0.035));
+      }
+    }
     eyes(0.02, 0.29, 0.09, 0.048);
     for (const s of [-1, 1]) {
-      const brow = ball('#5a321e', [s * 0.09, 0.1, 0.3], 1, [0.045, 0.012, 0.012]);
+      const brow = ball(k.brow, [s * 0.09, 0.1, 0.3], 1, [0.045, 0.012, 0.012]);
       brow.rotation.z = -s * 0.15;
       head.add(brow);
     }
     cheeks(-0.06, 0.25, 0.15);
     smile(-0.08, 0.3, 0.06, '#c0392b');
+  }
+  if (kind === 'kid') {
     // A star on his T-shirt.
     const star = new THREE.Mesh(smallStar(), mat('#ffd23f', 0.5));
     star.position.set(-0.02, 0.32, 0.26);
@@ -446,6 +529,8 @@ export function makeRider(kind) {
     return { pivot, s };
   });
 
+  bake(g);
+
   let raise = 0;
   let time = Math.random() * 10;
   let nextBlink = 1 + Math.random() * 3;
@@ -485,6 +570,7 @@ export function makeHands() {
     g.add(pivot);
     return { pivot, s };
   });
+  bake(g);
   let t = 0;
   let time = 0;
   return {

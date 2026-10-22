@@ -6,7 +6,8 @@ import * as sound from './sound.js';
 import { makeStaticWorld, makeTrackWorld, makeSpace, disposeTree, shadowFlags } from './scenery.js';
 import { makeSlideWorld } from './slide-world.js';
 import { makeBeachStaticWorld } from './tropical.js';
-import { makeSeatCar, makeTrainCar, makeRider, makeHands, makeRaft, makeSeatRaft, FRIENDS, FRIEND_SEAT, FRIEND_RAFT, RING_Z } from './characters.js';
+import { makeTrain } from './train.js';
+import { makeSeatCar, makeRider, makeHands, makeRaft, makeSeatRaft, FRIENDS, PEOPLE, FRIEND_SEAT, FRIEND_RAFT, RING_Z } from './characters.js';
 import { Effects, makeStreaks, makeSprayTrail } from './effects.js';
 import { makeSky, SUN_DIR, EARTH_R, WIND } from './nature.js';
 import { quality, stepDown, FrameWatch } from './quality.js';
@@ -15,7 +16,6 @@ const EYE = 1.3; // seat height above the track
 const RAFT_EYE = 0.95; // sitting low in a ring float
 const LOOK_AHEAD = 6; // meters
 const START_DELAY = 1.3; // seconds sitting in the station before rolling
-const CAR_GAP = 2.7; // meters between train cars
 // Sky colors (overhead / at the horizon), for day and for the sunset at the finish. The water
 // park's sky is a little more tropical turquoise.
 const SKIES = {
@@ -93,20 +93,19 @@ export class Ride {
 
     // Outside view: a real train with him and his friend in the front car, or the two of them
     // on a ring float, one behind the other.
-    this.cars = [
-      makeTrainCar('#ee4266', true, { number: 1 }),
-      makeTrainCar('#ffd23f', false, { number: 2 }),
-      makeTrainCar('#3bceac', false, { number: 3 }),
-    ];
-    this.scene.add(...this.cars);
+    this.train = makeTrain(['#ee4266', '#ffd23f', '#3bceac']);
+    this.cars = this.train.cars;
+    this.scene.add(this.train.group);
     this.raft = makeRaft();
     this.scene.add(this.raft);
-    for (const o of [...this.cars, this.raft, this.seatCar, this.seatRaft, this.hands.group]) shadowFlags(o);
+    for (const o of [this.train.group, this.raft, this.seatCar, this.seatRaft, this.hands.group]) shadowFlags(o);
     this.spray = makeSprayTrail(this.scene);
     this.kid = makeRider('kid');
     shadowFlags(this.kid.group);
     this.friend = null;
     this.friendKind = null;
+    this.riders = new Map(); // everyone else, built once and reused ride after ride
+    this.passengers = [];
 
     this.effects = new Effects(this.scene);
     this.mode = 'outside'; // start watching from outside; the eye button switches to the front seat
@@ -220,12 +219,23 @@ export class Ride {
     }
     this.kid.goggles.visible = this.slide;
 
-    // A different animal friend every ride.
+    // A different animal friend every ride, and the other friends and kids fill the cars behind.
     if (this.friend) this.friend.group.removeFromParent();
+    for (const p of this.passengers) p.group.removeFromParent();
     const choices = FRIENDS.filter((f) => f !== this.friendKind);
     this.friendKind = choices[Math.floor(Math.random() * choices.length)];
-    this.friend = makeRider(this.friendKind);
-    shadowFlags(this.friend.group);
+    this.friend = this.rider(this.friendKind);
+    const others = [...FRIENDS, ...PEOPLE].filter((f) => f !== this.friendKind).sort(() => Math.random() - 0.5);
+    this.passengers = this.cars.slice(1).flatMap((car, c) =>
+      [-0.45, 0.45].map((x, j) => {
+        const p = this.rider(others[c * 2 + j]);
+        p.group.position.set(x, 0.55, -0.3);
+        p.group.rotation.set(0, 0, 0);
+        p.group.scale.setScalar(1); // it may have ridden in the front seat view last time
+        car.add(p.group);
+        return p;
+      }),
+    );
 
     this.s = 0;
     this.v = 0;
@@ -293,7 +303,7 @@ export class Ride {
     const seat = this.mode === 'seat';
     this.seatCar.visible = seat && !this.slide;
     this.seatRaft.visible = seat && this.slide;
-    for (const car of this.cars) car.visible = !seat && !this.slide;
+    this.train.group.visible = !seat && !this.slide;
     this.raft.visible = !seat && this.slide;
     const f = this.friend.group;
     f.removeFromParent();
@@ -318,6 +328,15 @@ export class Ride {
     this.placeTrain();
     if (seat) this.placeSeatCamera(this.s, 1);
     else this.placeChaseCamera(0, snap);
+  }
+
+  rider(kind) {
+    if (!this.riders.has(kind)) {
+      const r = makeRider(kind);
+      shadowFlags(r.group);
+      this.riders.set(kind, r);
+    }
+    return this.riders.get(kind);
   }
 
   // Tap anywhere: hands up!
@@ -392,6 +411,7 @@ export class Ride {
     if (this.mode !== 'seat') this.hands.group.visible = false; // his arms belong to the front-seat view
     this.kid.update(dt, handsUp ? 1 : 0, speed01);
     this.friend.update(dt, handsUp || this.cheer > 0 ? 1 : 0, speed01);
+    if (this.train.group.visible) for (const p of this.passengers) p.update(dt, handsUp || this.cheer > 0 ? 1 : 0, speed01);
 
     for (const p of this.world.pickups) if (p.holder.visible) p.spin.rotation.y += dt * (p.spinRate ?? 3);
     WIND.value = this.time;
@@ -648,23 +668,21 @@ export class Ride {
   }
 
   placeTrain() {
-    const tr = this.track;
     if (this.slide) {
       if (this.mode !== 'seat') this.placeRaft();
       else this.spray.update(0, false);
       return;
     }
     if (this.mode === 'seat') return;
-    const m = new THREE.Matrix4();
-    this.cars.forEach((car, k) => {
-      const s = Math.max(0, this.s - k * CAR_GAP);
-      const up = this.vec(tr.up, s).normalize();
-      const tan = this.vec(tr.tan, s).normalize();
-      const side = new THREE.Vector3().crossVectors(up, tan).normalize();
-      m.makeBasis(side, up, tan);
-      car.quaternion.setFromRotationMatrix(m);
-      car.position.copy(this.vec(tr.pos, s));
-    });
+    this.train.place((s) => this.frameAt(s), this.s);
+  }
+
+  // The track's position, up and forward s meters along; past either end it carries on straight.
+  frameAt(s) {
+    const tr = this.track;
+    const c = Math.max(0, Math.min((tr.count - 1) * tr.step, s));
+    const tan = this.vec(tr.tan, c).normalize();
+    return { pos: this.vec(tr.pos, c).addScaledVector(tan, s - c), up: this.vec(tr.up, c).normalize(), tan };
   }
 
   placeRaft() {
