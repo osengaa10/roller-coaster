@@ -371,11 +371,15 @@ export class DrawPad {
     const now = performance.now();
     for (const ev of events.length ? events : [e]) {
       this.trail.push({ x: ev.clientX, y: ev.clientY, t: now });
-      // Tiny wiggles are skipped, except at an edge, so the view moves the moment he gets there.
-      const near = Math.hypot(ev.clientX - this.lastScreen.x, ev.clientY - this.lastScreen.y) < 4;
-      if (near && !this.atEdge(ev.clientX, ev.clientY)) continue;
+      // Always where the finger really is: while the view moves, edgeMove lays track here every
+      // frame. (Left at the last point added, a slow drift held the line flat and then jumped it
+      // 4 px at a time, so climbs drawn while the view scrolled came out as stairs.)
       this.lastScreen = { x: ev.clientX, y: ev.clientY };
-      stroke.push(this.toTrack(ev.clientX, ev.clientY));
+      // Tiny wiggles are skipped, except at an edge, so the view moves the moment he gets there.
+      const p = this.toTrack(ev.clientX, ev.clientY);
+      const prev = stroke[stroke.length - 1];
+      if (Math.hypot(p.x - prev.x, p.y - prev.y) * this.unit < 4 && !this.atEdge(ev.clientX, ev.clientY)) continue;
+      stroke.push(p);
     }
     while (this.trail.length > 2 && now - this.trail[0].t > 200) this.trail.shift();
     sound.drawMove(stroke[stroke.length - 1].y);
