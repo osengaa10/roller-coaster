@@ -22,7 +22,7 @@ const CONFETTI = {
   slide: ['💦', '🦆', '🌊', '🐠', '☀️', '🏖️'],
 };
 
-const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(mode), onChange: changed });
+const pad = new DrawPad($('pad'), $('hand'), { strokes: loadStrokes(mode), onChange: changed, ghost: $('ghost') });
 const ride = new Ride($('view'), { onFinish: celebrate, onStar: showStars });
 if (new URLSearchParams(location.search).has('debug')) window.__ride = ride; // for testing
 let track = null;
@@ -128,6 +128,13 @@ for (const crayon of document.querySelectorAll('.crayon')) {
     pad.color = Number(crayon.dataset.c);
     for (const c of document.querySelectorAll('.crayon')) c.classList.toggle('selected', c === crayon);
     sound.pop();
+  });
+}
+// Stickers: press one in the tray and drag it onto the track.
+for (const sticker of document.querySelectorAll('.sticker')) {
+  sticker.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pad.startSticker(sticker.dataset.st, e);
   });
 }
 tap('look', () => {

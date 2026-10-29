@@ -263,7 +263,7 @@ export function makeSlideWorld(tr, eye) {
     for (let i = b.drainStart; i <= vEnd; i++) drainPipe.add(i);
   }
   const kindOf = (i) => {
-    if (i > lipEnd) return null;
+    if (i > lipEnd || tr.air[i]) return null;
     if (tr.bowlMask[i] === 2 || drainPipe.has(i)) return null;
     if (tr.special[i] === 1) return 'rapids';
     return tr.enclosed[i] ? 'tube' : 'open';

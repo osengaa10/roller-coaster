@@ -406,3 +406,144 @@ export function shade(hex, f) {
   const out = rgb.map((v) => Math.round(f <= 1 ? v * f : v + (255 - v) * (f - 1)));
   return `rgb(${out.join(',')})`;
 }
+
+// ---- Stickers ----
+
+// How big a sticker on the track is: the same on screen at any zoom, and big enough to grab.
+export const stickerRadius = (pad) => Math.max(20, Math.min(pad.w, pad.h) * 0.032);
+
+const RAMP_PARTS = [
+  ['M4 41h40V19z', '#ffd23f', '#3d3d45'],
+  ['M17 41l7-10.5M28 41l9-13.5', null, '#3d3d45'],
+];
+
+// A sticker's picture, centered at x, y and r across: a rocket, or a striped ramp.
+export function stickerPicture(ctx, kind, x, y, r) {
+  if (kind === 'rocket') {
+    ctx.font = `${Math.round(r * 1.15)}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🚀', x, y + r * 0.06);
+    return;
+  }
+  ctx.save();
+  ctx.translate(x - r * 0.85, y - r * 0.85);
+  ctx.scale((r * 1.7) / 48, (r * 1.7) / 48);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (const [d, fill, stroke] of RAMP_PARTS) {
+    const p = new Path2D(d);
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill(p);
+    }
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = fill ? 3 : 4;
+    ctx.stroke(p);
+  }
+  ctx.restore();
+}
+
+// Where each sticker on the drawing sits on screen: a round badge on a little stem above its
+// spot on the rail. Returns [{ x, y, R, kind, rail, si, pi }] (si, pi: which stroke and point).
+export function stickerBadges(pad) {
+  const R = stickerRadius(pad);
+  const out = [];
+  pad.strokes.forEach((s, si) => {
+    s.p.forEach((pt, pi) => {
+      if (!pt.st) return;
+      const rail = pad.toScreen(pt);
+      out.push({ x: rail.x, y: rail.y - R * 1.75, R, kind: pt.st, rail, si, pi });
+    });
+  });
+  return out;
+}
+
+// Stickers on the track: what each one will do (a rocket's flames along the boosters, a jump's
+// flight over the gap), then the badge itself. `path` is the drawn path (station first).
+export function paintStickers(pad, badges, path, { boost = 0.6, jumps = [] } = {}) {
+  const { ctx, k } = pad;
+  // Flames: chevrons along the line after each rocket.
+  const size = Math.max(6, 11 * k);
+  const gap = Math.max(size * 2.2, 0.05 * pad.unit);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < path.length; i++) {
+    if (path[i].st !== 'rocket') continue;
+    let along = 0;
+    let next = gap * 0.6;
+    let n = 0;
+    for (let j = i + 1; j < path.length && along < boost * pad.unit; j++) {
+      const a = pad.toScreen(path[j - 1]);
+      const b = pad.toScreen(path[j]);
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      while (seg > 0 && next <= along + seg && next < boost * pad.unit) {
+        const f = (next - along) / seg;
+        const x = a.x + (b.x - a.x) * f;
+        const y = a.y + (b.y - a.y) * f;
+        const dx = (b.x - a.x) / seg;
+        const dy = (b.y - a.y) / seg;
+        const fade = 1 - (next / (boost * pad.unit)) * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(x - dx * size - dy * size * 0.8, y - dy * size + dx * size * 0.8);
+        ctx.lineTo(x, y);
+        ctx.lineTo(x - dx * size + dy * size * 0.8, y - dy * size - dx * size * 0.8);
+        ctx.strokeStyle = `rgba(255,120,40,${fade})`;
+        ctx.lineWidth = Math.max(3, size * 0.55);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(255,225,90,${fade})`;
+        ctx.lineWidth = Math.max(1.5, size * 0.22);
+        ctx.stroke();
+        next += gap;
+        n++;
+      }
+      along += seg;
+    }
+  }
+  // Jumps: a dotted flight path over the gap, landing on a padded ramp.
+  for (const j of jumps) paintJumpArc(pad, j);
+  for (const b of badges) {
+    ctx.strokeStyle = '#3d3d45';
+    ctx.lineWidth = Math.max(2, b.R * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(b.rail.x, b.rail.y);
+    ctx.lineTo(b.x, b.y + b.R);
+    ctx.stroke();
+    ctx.fillStyle = '#3d3d45';
+    ctx.beginPath();
+    ctx.arc(b.rail.x, b.rail.y, Math.max(2.5, b.R * 0.16), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    ctx.shadowBlur = b.R * 0.4;
+    ctx.shadowOffsetY = b.R * 0.15;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = '#ffd23f';
+    ctx.lineWidth = Math.max(3, b.R * 0.16);
+    ctx.stroke();
+    stickerPicture(ctx, b.kind, b.x, b.y, b.R * 0.78);
+  }
+}
+
+// A jump's flight seen from the side: the rail stops at a kicker ramp, a dotted arc sails over
+// the gap and comes down on the landing ramp. j: { from, to, peak } in drawing units.
+function paintJumpArc(pad, j) {
+  const { ctx, k } = pad;
+  const a = pad.toScreen(j.from);
+  const b = pad.toScreen(j.to);
+  const top = Math.min(a.y, b.y) - j.peak * pad.unit;
+  ctx.save();
+  ctx.setLineDash([Math.max(2, 4 * k), Math.max(6, 12 * k)]);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(255,77,109,0.9)';
+  ctx.lineWidth = Math.max(3, 6 * k);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.bezierCurveTo(a.x + (b.x - a.x) * 0.25, top, a.x + (b.x - a.x) * 0.75, top, b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+}

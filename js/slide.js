@@ -2,6 +2,7 @@
 // Pure (no DOM, no three.js) so it can be unit tested in node, like track.js.
 //
 // Drawing coordinates are normalized (y = 0 is the ground, 1 unit = 40 m); bowlPath works in meters.
+import { findCorkscrews, cutOut, twistCut } from './corkscrew.js';
 
 const TURN_NEEDED = 1.75 * Math.PI; // 315 degrees of turning in one direction makes a circle
 const MIN_BOWL = 0.25; // normalized: circles up to this wide are "tight" (about 165 px on an iPad)
@@ -93,19 +94,9 @@ export function findBowls(path) {
 // The path with each bowl's circle cut out. The point where the circle ends carries the bowl, so
 // buildTrack knows where to splice the 3D bowl in.
 export function cutBowls(path, bowls) {
-  if (!bowls.length) return path;
-  const out = [];
-  let k = 0;
-  for (let i = 0; i < path.length; i++) {
-    const b = bowls[k];
-    if (b && i > b.i0 && i < b.i1) continue;
-    if (b && i === b.i1) {
-      out.push({ ...path[i], bowl: { r: b.r, top: b.top, turns: b.turns } });
-      k++;
-    } else out.push(path[i]);
-  }
-  return out;
+  return cutOut(path, bowls.map(bowlCut));
 }
+const bowlCut = (b) => ({ i0: b.i0, i1: b.i1, mark: { bowl: { r: b.r, top: b.top, turns: b.turns } } });
 
 // --- Bowl in 3D ------------------------------------------------------------------------------
 
@@ -332,12 +323,15 @@ export function findRapids(path) {
   return out;
 }
 
-// The slide's path after its tricks are applied: tight circles cut out (bowls) and zigzags
-// flattened into rapids (tagged rp: 1). `found` reuses features found earlier, which stay valid
-// while a line is only being added to.
+// The slide's path after its tricks are applied: rows of curls cut out (corkscrew tubes), tight
+// circles cut out (bowls) and zigzags flattened into rapids (tagged rp: 1). `found` reuses
+// features found earlier, which stay valid while a line is only being added to.
 export function shapeSlide(path, found = null) {
-  const bowls = found ? found.bowls : findBowls(path);
-  const p = cutBowls(path, bowls).map((q) => ({ ...q }));
+  const corkscrews = found ? found.corkscrews : findCorkscrews(path);
+  // The circles of a corkscrew's curls aren't toilet bowls too.
+  const bowls = found ? found.bowls : findBowls(path).filter((b) => !corkscrews.some((c) => b.i0 <= c.i1 && b.i1 >= c.i0));
+  const cuts = [...bowls.map(bowlCut), ...corkscrews.map(twistCut)].sort((a, b) => a.i0 - b.i0);
+  const p = cutOut(path, cuts).map((q) => ({ ...q }));
   const rapids = found ? found.rapids : findRapids(p);
   for (const r of rapids) {
     if (r.i1 >= p.length) continue;
@@ -357,5 +351,5 @@ export function shapeSlide(path, found = null) {
       p[k].rl = rl;
     }
   }
-  return { path: p, bowls, rapids, found: { bowls, rapids } };
+  return { path: p, bowls, rapids, corkscrews, found: { bowls, rapids, corkscrews } };
 }

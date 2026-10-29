@@ -46,6 +46,21 @@ export class Effects {
     });
   }
 
+  // Rocket flames shooting out the back (back: unit vector backwards along the track).
+  flames(at, back, carry) {
+    this.burst({
+      at,
+      count: 20,
+      colors: ['#ffd23f', '#ff8c42', '#ff4d6d', '#fff4b0'],
+      velocity: () => back.clone().multiplyScalar(6 + Math.random() * 8).add(new THREE.Vector3().randomDirection().multiplyScalar(1.5)).add(carry),
+      gravity: -1,
+      drag: 2,
+      life: 0.5,
+      size: 0.55,
+      glow: true,
+    });
+  }
+
   // Water spraying up on both sides of the track.
   splash(at, side, count = 120) {
     for (const s of [-1, 1]) {

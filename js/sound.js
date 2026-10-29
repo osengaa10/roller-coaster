@@ -344,6 +344,108 @@ export function quack(n = 1) {
   }
 }
 
+// Rocket boosters coming up: three beeps, the last one higher ("3, 2, 1...").
+export function countdown() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  [0, 0.4, 0.8].forEach((at, i) => tone(i < 2 ? 660 : 990, t + at, 0.16, { type: 'square', vol: 0.08 }));
+}
+
+// Blast off: a deep rumbling roar that rises, with crackle on top.
+export function rocket() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer;
+  const f = ctx.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.setValueAtTime(200, t);
+  f.frequency.exponentialRampToValueAtTime(1400, t + 0.6);
+  f.frequency.exponentialRampToValueAtTime(300, t + 2.2);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.9, t + 0.08);
+  g.gain.setValueAtTime(0.9, t + 0.9);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 2.3);
+  src.connect(f).connect(g).connect(master);
+  src.start(t, Math.random());
+  src.stop(t + 2.4);
+  tone(90, t, 1.6, { type: 'sawtooth', vol: 0.18, to: 240 });
+  for (let i = 0; i < 16; i++) noise(t + 0.1 + Math.random() * 1.4, 0.03, { freq: 2500 + Math.random() * 3000, q: 3, vol: 0.12 });
+}
+
+// Landing a jump: a thump and a big cartoon "boi-oi-oing!"
+export function boing() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  noise(t, 0.25, { type: 'lowpass', freq: 260, q: 0.8, vol: 0.8 });
+  const o = ctx.createOscillator();
+  const wob = ctx.createOscillator();
+  const depth = ctx.createGain();
+  const g = ctx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(140, t);
+  o.frequency.exponentialRampToValueAtTime(420, t + 0.12);
+  o.frequency.exponentialRampToValueAtTime(260, t + 0.7);
+  wob.frequency.value = 14;
+  depth.gain.setValueAtTime(70, t);
+  depth.gain.exponentialRampToValueAtTime(5, t + 0.7);
+  wob.connect(depth).connect(o.frequency);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.3, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+  o.connect(g).connect(master);
+  o.start(t);
+  wob.start(t);
+  o.stop(t + 0.8);
+  wob.stop(t + 0.8);
+}
+
+// A sticker pressed onto the track: a quick "thwip!"
+export function stick() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  tone(300, t, 0.1, { type: 'triangle', vol: 0.25, to: 1200 });
+  noise(t + 0.06, 0.06, { freq: 4000, q: 2, vol: 0.2 });
+  tone(1500, t + 0.09, 0.12, { vol: 0.12 });
+}
+
+// A sticker dropped off the track: it vanishes in a little puff.
+export function poof() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  noise(t, 0.3, { freq: 1200, q: 0.6, vol: 0.3 });
+  tone(700, t, 0.2, { type: 'triangle', vol: 0.12, to: 300 });
+}
+
+// Curls turned into a corkscrew, or round one on the ride: a springy "boi-oi-oing" that winds
+// up as it twists, with little ticks climbing on top.
+export function twist() {
+  if (!ready()) return;
+  const t = ctx.currentTime;
+  const o = ctx.createOscillator();
+  const wob = ctx.createOscillator();
+  const depth = ctx.createGain();
+  const g = ctx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(220, t);
+  o.frequency.exponentialRampToValueAtTime(700, t + 0.9);
+  wob.frequency.setValueAtTime(10, t);
+  wob.frequency.linearRampToValueAtTime(5, t + 0.9);
+  depth.gain.value = 80;
+  wob.connect(depth).connect(o.frequency);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.03);
+  g.gain.setValueAtTime(0.22, t + 0.7);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.0);
+  o.connect(g).connect(master);
+  o.start(t);
+  wob.start(t);
+  o.stop(t + 1.05);
+  wob.stop(t + 1.05);
+  for (let i = 0; i < 6; i++) tone(880 * Math.pow(2, i / 6), t + 0.1 + i * 0.12, 0.1, { vol: 0.07 });
+}
+
 // Round and round: a whirling whoosh that swings from ear to ear.
 export function swirl(seconds = 1.6) {
   if (!ready()) return;

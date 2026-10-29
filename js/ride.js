@@ -245,6 +245,14 @@ export class Ride {
     this.nextStar = 0;
     this.starCount = 0;
     this.nextTunnel = 0;
+    this.nextTwist = 0;
+    this.nextLaunch = 0;
+    this.nextJump = 0;
+    this.flying = false;
+    this.bump = 0; // landing a jump gives the camera a jolt, this big
+    this.countedDown = false;
+    this.boostTo = -1; // the end of the boosters he's on (sample index)
+    this.lastFlame = -1;
     this.splashed = false;
     this.nextBowl = 0;
     this.nextDrain = 0;
@@ -461,7 +469,11 @@ export class Ride {
     this.fovBoost += (boost - this.fovBoost) * Math.min(1, dt * 3);
     this.camera.fov = this.baseFov + this.fovBoost;
     this.camera.updateProjectionMatrix();
-    if (this.v > 0 && !this.finished) {
+    this.bump = Math.max(0, this.bump - dt * 2.5);
+    if (this.bump > 0) this.camera.translateY(-0.35 * this.bump * Math.sin(this.time * 30) * this.bump);
+    // Flying through the air over a jump is smooth: no rumble.
+    const flying = this.track.air?.[Math.min(this.track.count - 1, Math.round(this.s / this.track.step))];
+    if (this.v > 0 && !this.finished && !flying) {
       const t = this.time;
       const amp = (seat ? 0.05 : 0.08) * ramp(6, 35) * (this.slide ? 0.6 : 1); // water is smoother than steel
       this.camera.translateX(amp * (Math.sin(t * 31) * 0.6 + Math.sin(t * 53 + 1.3) * 0.4));
@@ -570,6 +582,75 @@ export class Ride {
         this.wetLens(14);
         this.cheer = 1.2;
       } else sound.whoosh();
+    }
+    // Rocket boosters: a countdown as they come up, then blast off, with flames (or, on the
+    // slide, a water cannon) out the back all the way along.
+    const launches = tr.launches;
+    if (this.nextLaunch < launches.length) {
+      const [a, b] = launches[this.nextLaunch];
+      const ahead = a * tr.step - this.s;
+      if (!this.countedDown && ahead > 0 && ahead < Math.max(1, this.v) * this.timeScale * 1.2) {
+        this.countedDown = true;
+        sound.countdown();
+      }
+      if (i >= a) {
+        this.nextLaunch++;
+        this.countedDown = false;
+        this.boostTo = b;
+        this.cheer = 2.5;
+        if (this.slide) {
+          sound.jet();
+          sound.whoosh();
+          this.wetLens(8);
+        } else sound.rocket();
+      }
+    }
+    if (i <= this.boostTo && this.time - this.lastFlame > 0.05) {
+      this.lastFlame = this.time;
+      const back = this.vec(tr.tan, this.s).negate();
+      const carry = back.clone().multiplyScalar(-this.v * 0.6);
+      const at = this.vec(tr.pos, Math.max(0, this.s - (this.slide ? 1.5 : 8))).addScaledVector(this.vec(tr.up, this.s), 0.6);
+      if (this.slide) this.effects.bubbles(at, back.multiplyScalar(8).add(carry), 18);
+      else this.effects.flames(at, back, carry);
+    }
+
+    // Ramp jumps: "wheee" off the lip, quiet in the air, then a boing and a bump on landing
+    // (a big splash on the slide).
+    const jumps = tr.jumps;
+    if (this.nextJump < jumps.length) {
+      const j = jumps[this.nextJump];
+      if (!this.flying && i >= j.lip) {
+        this.flying = true;
+        this.cheer = 2.5;
+        sound.whee();
+      }
+      if (this.flying && i >= j.land) {
+        this.flying = false;
+        this.nextJump++;
+        this.bump = 1;
+        this.cheer = Math.max(this.cheer, 1.5);
+        sound.boing();
+        const at = this.vec(tr.pos, this.s);
+        if (this.slide) {
+          const up = this.vec(tr.up, this.s);
+          const side = new THREE.Vector3().crossVectors(up, this.vec(tr.tan, this.s)).normalize();
+          this.effects.splash(at, side, 60);
+          sound.splash();
+          this.wetLens(12);
+        } else this.effects.sparkle(at, this.vec(tr.tan, this.s).multiplyScalar(this.v * 0.5));
+      }
+    }
+
+    // Into a corkscrew: boing, hands up, and a spray of sparkles.
+    const twists = tr.corkscrews;
+    while (this.nextTwist < twists.length && i >= twists[this.nextTwist][0]) {
+      this.nextTwist++;
+      sound.twist();
+      setTimeout(() => this.running && sound.whee(), 450 / this.timeScale);
+      this.cheer = 2.2;
+      const carry = this.vec(tr.tan, this.s).multiplyScalar(this.v);
+      if (this.slide) this.effects.bubbles(this.vec(tr.pos, this.s + 2), carry, 24);
+      else this.effects.sparkle(this.vec(tr.pos, this.s + 2), carry);
     }
     const splash = this.world.splash;
     if (!this.splashed && splash !== null && this.s >= splash * tr.step - 1) {

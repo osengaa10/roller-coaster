@@ -75,11 +75,20 @@ export function makeTrackWorld(tr, eye) {
   // Way up high nobody looks closely, so giant space coasters get fewer pieces there.
   const high = (i) => tr.pos[i * 3 + 1] > HIGH;
   const geoIds = all.filter((i) => !high(i) || i % 3 === 0 || i === n - 1);
-  for (const s of [-1, 1]) {
-    const rail = tube(geoIds, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 12, colorAt: railPaint });
-    g.add(new THREE.Mesh(rail, steel));
+  // Over a jump there's no track at all: it stops at the kicker ramp and starts again where he lands.
+  const pieces = [[]];
+  for (const i of geoIds) {
+    if (tr.air[i]) {
+      if (pieces[pieces.length - 1].length) pieces.push([]);
+    } else pieces[pieces.length - 1].push(i);
   }
-  g.add(new THREE.Mesh(tube(geoIds, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 16, colorAt: paint }), steel));
+  for (const ids of pieces.filter((p) => p.length > 1)) {
+    for (const s of [-1, 1]) {
+      const rail = tube(ids, (i) => P(i).addScaledVector(side(i), s * RAIL_GAP), U, side, 0.1, { sides: 12, colorAt: railPaint });
+      g.add(new THREE.Mesh(rail, steel));
+    }
+    g.add(new THREE.Mesh(tube(ids, (i) => P(i).addScaledVector(U(i), -SPINE_DROP), U, side, 0.26, { sides: 16, colorAt: paint }), steel));
+  }
   const updates = [];
 
   // Cross-ties every meter: a crossbar between the rails with a clamp on each rail and a plate
@@ -87,7 +96,7 @@ export function makeTrackWorld(tr, eye) {
   const m = new THREE.Matrix4();
   const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8);
   const unitBox = new THREE.BoxGeometry(1, 1, 1);
-  const tieIds = all.filter((i) => i % 2 === 0 && (!high(i) || i % 8 === 0));
+  const tieIds = all.filter((i) => i % 2 === 0 && (!high(i) || i % 8 === 0) && !tr.air[i]);
   const bars = new THREE.InstancedMesh(tieGeometry(), shiny('#ffffff'), tieIds.length);
   const braces = new THREE.InstancedMesh(unitCyl, shiny('#ffffff'), tieIds.length * 2);
   const col = new THREE.Color();
@@ -106,6 +115,48 @@ export function makeTrackWorld(tr, eye) {
     });
   });
   g.add(bars, braces);
+
+  // Jumps: a kicker ramp up to the lip and a landing pad, both decked in yellow and black stripes
+  // under the rails, with a padded red bumper on each side of the landing.
+  const deckIds = [];
+  const bumpers = [];
+  for (const j of tr.jumps) {
+    for (let i = Math.max(0, j.takeoff - Math.round(4 / tr.step)); i <= j.lip; i++) deckIds.push(i);
+    for (let i = j.land; i <= Math.min(n - 1, j.land + Math.round(5 / tr.step)); i++) deckIds.push(i);
+    for (const s of [-1, 1]) bumpers.push([Math.min(n - 1, j.land + Math.round(1.5 / tr.step)), s]);
+  }
+  if (deckIds.length) {
+    const deck = new THREE.InstancedMesh(unitBox, shiny('#ffffff', { shininess: 30 }), deckIds.length);
+    const stripe = [new THREE.Color('#ffd23f'), new THREE.Color('#3d3d45')];
+    deckIds.forEach((i, k) => {
+      m.makeBasis(side(i), U(i), T(i)).scale(new THREE.Vector3(2.2, 0.12, tr.step * 1.05)).setPosition(P(i).addScaledVector(U(i), -0.28));
+      deck.setMatrixAt(k, m);
+      deck.setColorAt(k, stripe[Math.floor((i * tr.step) / 0.9) % 2]);
+    });
+    g.add(deck);
+    const pads = new THREE.InstancedMesh(new THREE.CapsuleGeometry(0.35, 2.2, 4, 10), shiny('#ff4d6d', { shininess: 50 }), bumpers.length);
+    bumpers.forEach(([i, s], k) => {
+      m.makeBasis(side(i), U(i), T(i)).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)).setPosition(P(i).addScaledVector(side(i), s * 1.5).addScaledVector(U(i), 0.1));
+      pads.setMatrixAt(k, m);
+    });
+    g.add(pads);
+  }
+
+  // Rocket boosters where he put a rocket sticker: glowing fins between the rails, every meter,
+  // with dark plates under them.
+  const boostIds = all.filter((i) => tr.launches.some(([a, b]) => i >= a && i <= b) && i % 2 === 0);
+  if (boostIds.length) {
+    const fins = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ color: '#ffb000', emissive: '#ff6a00', emissiveIntensity: 1.4, roughness: 0.4 }), boostIds.length);
+    const plates = new THREE.InstancedMesh(unitBox, shiny('#3d3d45', { shininess: 40 }), boostIds.length);
+    boostIds.forEach((i, k) => {
+      m.makeBasis(side(i), U(i), T(i)).scale(new THREE.Vector3(0.08, 0.32, 0.7)).setPosition(P(i).addScaledVector(U(i), -0.02));
+      fins.setMatrixAt(k, m);
+      m.makeBasis(side(i), U(i), T(i)).scale(new THREE.Vector3(0.8, 0.06, 0.85)).setPosition(P(i).addScaledVector(U(i), -0.2));
+      plates.setMatrixAt(k, m);
+    });
+    fins.userData.noShadow = true;
+    g.add(fins, plates);
+  }
 
   // Lift chain up the middle of every climb.
   const liftIds = all.filter((i) => tr.lift[i]);

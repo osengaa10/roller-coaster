@@ -1,11 +1,13 @@
 // The drawing screen: a side view of a sunny park (or a beach, for the water slide) where a
 // finger drag lays down track. This file handles the fingers, the view and the layers; the
 // pictures are painted by draw-park.js (coaster) and draw-slide.js (water slide).
-import { STATION, MIN_Y, MIN_DRAWN_LENGTH, pathFromStrokes, drawnLength, stationFor } from './track.js';
+import { STATION, MIN_Y, MIN_DRAWN_LENGTH, WORLD_SCALE, pathFromStrokes, drawnLength, stationFor } from './track.js';
 import { shapeSlide } from './slide.js';
+import { shapeCoaster, tidyCurls } from './corkscrew.js';
 import * as beach from './draw-slide.js';
 import * as park from './draw-park.js';
-import { trackShape, supportSpots2D, clearSprites, sunGlow } from './draw-art.js';
+import { trackShape, supportSpots2D, clearSprites, sunGlow, stickerBadges, paintStickers, stickerRadius } from './draw-art.js';
+import { LAUNCH, JUMP } from './stickers.js';
 import { quality } from './quality.js';
 import * as sound from './sound.js';
 
@@ -26,6 +28,7 @@ const TURN_BACK = 6; // px moved away from an edge in the last tenth of a second
 const PINCH_BEFORE = 15; // a second finger only starts a pinch while the line is shorter than this
 const IDLE_FRAME = 30; // ms between frames while the scenery just sways (about 30 fps)
 const SUPPORTS_EVERY = 100; // ms: while a line is drawn, its columns catch up this often
+const STICK_PX = 56; // a sticker let go this close to the track (px) sticks onto it
 
 // Sky color by height (normalized units): blue near the ground, dark space way up high.
 // The blue lasts a long way up and only slowly turns into space (1 unit = 40 m).
@@ -59,8 +62,31 @@ const PLANETS = [
   { x: 32, y: 34, r: 0.9, color: '#d9623b' },
 ];
 
+// Where each jump sticker's flight shows on the drawing: from the top of the kicker ramp to
+// where the train comes down, about as far as a jump goes on the ride (less near the end).
+// In drawing units: [{ from, to, peak }].
+function jumpPreviews(pts) {
+  const kick = JUMP.kicker / 40;
+  const far = 20 / 40;
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (pts[i].st !== 'jump') continue;
+    let d = 0;
+    let from = null;
+    let to = null;
+    for (let j = i + 1; j < pts.length; j++) {
+      d += Math.hypot(pts[j].x - pts[j - 1].x, pts[j].y - pts[j - 1].y);
+      if (!from && d >= kick) from = pts[j];
+      to = pts[j];
+      if (d >= far) break;
+    }
+    if (from && to && d >= JUMP.shortest / 40 + kick) out.push({ from, to, peak: Math.min(0.12, d * 0.2) });
+  }
+  return out;
+}
+
 export class DrawPad {
-  constructor(canvas, hand, { strokes = [], onChange = () => {} } = {}) {
+  constructor(canvas, hand, { strokes = [], onChange = () => {}, ghost = null } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.hand = hand;
@@ -82,7 +108,10 @@ export class DrawPad {
     this.active = true;
     this.mode = 'coaster';
     this.sessions = {}; // per game: its strokes, undo history and view
-    this.found = null; // water slide: bowls and rapids found in the drawing (cached; see slideShape)
+    this.ghost = ghost; // the sticker being dragged
+    this.drag = null; // a sticker on its way to the track: { kind, id, at }
+    this.badges = []; // stickers on the track, where they were last painted
+    this.found = null; // tricks found in the drawing: corkscrews, and the slide's bowls and rapids (cached; see slideShape)
     // The picture is four stacked canvases, so the browser layers them for free: the back (sky,
     // scenery, ground) and the track are only repainted when the view or the drawing changes;
     // what moves is painted every frame on the live canvas between them and on this one, on top.
@@ -194,15 +223,33 @@ export class DrawPad {
     return shape;
   }
 
+  // The coaster's tricks: rows of curls become corkscrews (found and kept the same way).
+  coasterShape(path) {
+    const shape = shapeCoaster(path, this.found);
+    this.found = shape.found;
+    return shape;
+  }
+
+  // The coaster's line as the drawing screen shows it: curls tidied into a neat spring once
+  // they're found. Cached, so the track's shape isn't worked out again every frame.
+  shownPath(pts) {
+    const { corkscrews } = this.coasterShape(pts);
+    const c = this.tidyCache;
+    if (c && c.pts === pts && c.corkscrews === corkscrews) return c.shown;
+    this.tidyCache = { pts, corkscrews, shown: tidyCurls(pts, corkscrews) };
+    return this.tidyCache.shown;
+  }
+
   // A line was finished (or the drawing changed): look for tricks again, with a sound for each new one.
   strokesChanged() {
     const before = this.found;
     this.found = null;
-    if (this.mode !== 'slide') return;
-    const now = this.slideShape(this.path()).found;
-    const more = (k) => now[k].length > (before ? before[k].length : 0);
-    if (more('bowls')) sound.swirl();
-    if (more('rapids')) sound.splash();
+    const slide = this.mode === 'slide';
+    const now = (slide ? this.slideShape(this.path()) : this.coasterShape(this.path())).found;
+    const more = (k) => now[k].length > (before?.[k] ? before[k].length : 0);
+    if (more('corkscrews')) sound.twist();
+    if (slide && more('bowls')) sound.swirl();
+    if (slide && more('rapids')) sound.splash();
   }
 
   resize() {
@@ -279,6 +326,15 @@ export class DrawPad {
   down(e) {
     e.preventDefault();
     sound.unlock();
+    if (this.drag) return;
+    // A sticker already on the track can be picked up and moved (or dragged off to get rid of it).
+    if (this.pointerId === null && !this.pinch && this.pointers.size === 0) {
+      const r = this.canvas.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const hit = this.badges.findLast((b) => Math.hypot(x - b.x, y - b.y) < b.R * 1.3);
+      if (hit) return this.pickUpSticker(hit, e);
+    }
     // Once he's really drawing, another touch (his other hand, a palm) is ignored, so the line
     // keeps following his finger instead of turning into a pinch.
     if (this.pointerId !== null && this.strokes[this.strokes.length - 1].p.length >= PINCH_BEFORE) return;
@@ -302,6 +358,10 @@ export class DrawPad {
   }
 
   move(e) {
+    if (this.drag) {
+      if (e.pointerId === this.drag.id) this.dragSticker(e);
+      return;
+    }
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this.pinch) return this.movePinch();
     if (e.pointerId !== this.pointerId) return;
@@ -323,6 +383,10 @@ export class DrawPad {
   }
 
   up(e) {
+    if (this.drag) {
+      if (e.pointerId === this.drag.id) this.dropSticker(e.type === 'pointercancel');
+      return;
+    }
     this.pointers.delete(e.pointerId);
     if (this.pinch && this.pointers.size < 2) {
       this.pinch = null;
@@ -334,6 +398,99 @@ export class DrawPad {
     sound.drawStop();
     this.trackDirty = true;
     this.strokesChanged();
+    this.onChange();
+  }
+
+  // ---- Stickers ----
+
+  // A finger pressed a sticker in the tray: it comes along with the finger.
+  startSticker(kind, e) {
+    if (this.drag || this.pointerId !== null || this.pinch) return;
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // without capture the drag still works while the finger stays over the drawing
+    }
+    this.drag = { kind, id: e.pointerId, at: null, placed: false };
+    if (this.ghost) {
+      this.ghost.innerHTML = document.querySelector(`.sticker[data-st="${kind}"]`)?.innerHTML || '';
+      this.ghost.classList.add('show');
+    }
+    sound.pop();
+    this.dragSticker(e);
+  }
+
+  // Picking up a sticker that's on the track: it comes off (one undo step puts it back).
+  pickUpSticker(badge, e) {
+    const stroke = this.strokes[badge.si];
+    const pt = stroke?.p[badge.pi];
+    if (!pt?.st) return;
+    this.pushHistory();
+    const { st, ...rest } = pt;
+    stroke.p[badge.pi] = rest;
+    this.stickersChanged();
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // see startSticker
+    }
+    this.drag = { kind: st, id: e.pointerId, at: null, placed: true };
+    if (this.ghost) {
+      this.ghost.innerHTML = document.querySelector(`.sticker[data-st="${st}"]`)?.innerHTML || '';
+      this.ghost.classList.add('show');
+    }
+    sound.pop();
+    this.dragSticker(e);
+  }
+
+  // The sticker floats just above his finger and grows when it's close enough to stick.
+  dragSticker(e) {
+    const r = this.canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    this.drag.at = this.nearestPoint(x, y);
+    if (!this.ghost) return;
+    const size = this.ghost.offsetWidth || 80;
+    this.ghost.style.transform = `translate(${x - size / 2}px, ${y - size * 1.15}px)`;
+    this.ghost.classList.toggle('near', !!this.drag.at);
+  }
+
+  // Let go: on the track it sticks there; anywhere else it's gone.
+  dropSticker(cancelled = false) {
+    const { kind, at, placed } = this.drag;
+    this.drag = null;
+    this.ghost?.classList.remove('show', 'near');
+    if (at && !cancelled) {
+      if (!placed) this.pushHistory();
+      const stroke = this.strokes[at.si];
+      stroke.p[at.pi] = { ...stroke.p[at.pi], st: kind };
+      this.stickersChanged();
+      sound.stick();
+    } else if (placed) sound.poof(); // taken off the track (undo brings it back)
+  }
+
+  // The drawn point nearest a spot on screen, if it's close enough for a sticker to stick to.
+  nearestPoint(x, y) {
+    const reach = Math.max(STICK_PX, stickerRadius(this) * 2.2);
+    let best = null;
+    let bestD = reach;
+    this.strokes.forEach((s, si) => {
+      s.p.forEach((pt, pi) => {
+        const q = this.toScreen(pt);
+        const d = Math.hypot(q.x - x, q.y - y);
+        if (d < bestD) {
+          bestD = d;
+          best = { si, pi };
+        }
+      });
+    });
+    return best;
+  }
+
+  // Stickers ride on the drawn points, so the drawing has changed (the path is built again).
+  stickersChanged() {
+    this.pathCache = null;
+    this.trackDirty = true;
     this.onChange();
   }
 
@@ -459,7 +616,7 @@ export class DrawPad {
   }
 
   undo() {
-    if (!this.history.length) return false;
+    if (!this.history.length || this.drag) return false;
     this.strokes = this.history.pop();
     this.dirty = true;
     this.found = null;
@@ -468,7 +625,7 @@ export class DrawPad {
   }
 
   clear() {
-    if (!this.strokes.length) return false;
+    if (!this.strokes.length || this.drag) return false;
     this.pushHistory(); // so undo can bring it back
     this.strokes = [];
     this.found = null;
@@ -607,12 +764,15 @@ export class DrawPad {
     if (this.mode === 'slide') {
       this.slideLive = beach.paintSlide(this, pts, this.slideShape(pts));
       beach.paintTower(this);
-      return;
+    } else {
+      const shown = this.shownPath(pts);
+      const { shape, spots } = this.trackParts(shown);
+      park.paintStationBack(this);
+      park.paintTrack(this, shown, shape, spots);
+      park.paintStationFront(this);
     }
-    const { shape, spots } = this.trackParts(pts);
-    park.paintStationBack(this);
-    park.paintTrack(this, pts, shape, spots);
-    park.paintStationFront(this);
+    this.badges = stickerBadges(this);
+    paintStickers(this, this.badges, pts, { boost: LAUNCH.length / WORLD_SCALE, jumps: jumpPreviews(pts) });
   }
 
   // Which side the spine hangs on and where the columns go. They're in drawing units, so moving

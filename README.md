@@ -7,6 +7,8 @@ The app opens on two big pictures: tap the **coaster** or the **water slide**. E
 ## Roller coaster
 
 1. **Draw** the coaster with your finger: hills, big drops, loop-de-loops. The track always starts at the little station. Tap a crayon at the top to change the track color (the striped one is rainbow).
+   **Draw a row of little curly-cues** (like a spring, ℓℓℓ) and they turn into a **corkscrew** when you lift your finger (boing!): the train twists upside down once per curl. One curl on its own stays a little loop, and bigger curls stay loop-de-loops.
+   **Drag a sticker** from the tray at the bottom onto the track: the 🚀 **rocket** launches the train with a countdown and flames (the arrows show how far the boosters go), and the **ramp** makes the train **jump** off a kicker, fly over a gap and land back on the track (the dotted arc shows the flight). Drag a sticker along the track to move it, or off the track to get rid of it.
 2. Tap the big green **▶** button.
 3. **Ride it** in first person with an animal friend (a different one each time), then ride again or draw a new one.
 
@@ -25,9 +27,10 @@ Things that happen on their own during the ride:
 Same idea, at a tropical water park on an island: sand, palm trees, beach umbrellas, kiddie pools with mushroom fountains, the sea with sailboats, gulls, and a smoking volcano on the horizon.
 
 1. **Draw** the slide. It starts at the top of a tower with stairs and a striped canopy.
-2. **Draw a tight circle** with your finger and it turns into a **toilet bowl**: when you lift your finger the circle becomes a funnel (with a swirly sound). On the ride you spin round and round the bowl, faster and faster, then get *flushed* down the drain and shoot out underneath. Go round twice for a bigger bowl. Big circles stay loops, inside a see-through closed tube.
-3. **Draw a quick zigzag** and it becomes **rapids**: a wide rocky white-water channel where the float bounces and spins over the waves, splashing.
-4. Ride it on a two-seat ring float with your animal friend sitting in front (you wear swim goggles).
+2. **Draw a row of curly-cues** and it becomes a **twisty corkscrew tube**. The stickers work here too: the rocket is a **water cannon** and the ramp a **ski-jump** that lands with a splash.
+3. **Draw a tight circle** with your finger and it turns into a **toilet bowl**: when you lift your finger the circle becomes a funnel (with a swirly sound). On the ride you spin round and round the bowl, faster and faster, then get *flushed* down the drain and shoot out underneath. Go round twice for a bigger bowl. Big circles stay loops, inside a see-through closed tube.
+4. **Draw a quick zigzag** and it becomes **rapids**: a wide rocky white-water channel where the float bounces and spins over the waves, splashing.
+5. Ride it on a two-seat ring float with your animal friend sitting in front (you wear swim goggles).
 
 Things that happen on their own:
 - **Rubber ducks** bob along the slide. Scoop them up (quack!) and count them at the end.
@@ -48,6 +51,7 @@ No reading needed, no menus, and nothing can go wrong: the train never gets stuc
 | ↩ (blue) | Undo the last line |
 | 🗑 (orange) | Start over (undo brings it back) |
 | Crayons (top-left) | Pick the track color |
+| 🚀 / ramp stickers (bottom middle) | Drag onto the track for a rocket launch / a jump |
 | 🏠 (purple, during ride) | Back to drawing |
 | seat / 👁 (blue, during ride) | Ride in the front seat / watch from outside |
 | ⟳ / ✏️ (after ride) | Ride again / draw again |
@@ -77,6 +81,8 @@ Graphics quality picks itself: rides start at the best tier (real sun shadows, g
 - `js/draw.js`: the side-view drawing canvas (pointer events, iOS gesture blocking, the view), painted in stacked layers: the scenery and the track are only repainted when they change, and what moves (clouds, swaying trees, the waiting train's riders, running water) is painted every frame on top. `js/draw-park.js` paints the coaster's park (mountains, woods, the steel track with its spine, truss, lift chain and columns, the station and train) and `js/draw-slide.js` the beach. `js/draw-art.js` holds the shared pieces, including the pure math for the side view: which side the spine hangs on (matching the ride's loops and rolls), where the chain runs and where columns can stand without poking through other track.
 - `js/track.js`: pure math that turns the finger path into a smooth 3D track. Loops tilt slightly sideways so they don't hit themselves. Long right-to-left stretches get barrel-rolled back upright. The speed profile uses gravity on drops, plus a chain lift so it never stalls. It also picks the spots for stars, tunnels and the pond.
 - `js/slide.js`: water slide math: finding tight circles, building the 3D toilet bowl, and the run-out into the pool.
+- `js/corkscrew.js`: finding rows of curls (both games), the neat spring the drawing screen shows instead, and the 3D corkscrew spliced in where they were.
+- `js/stickers.js`: the stickers' track math: where the rocket boosters run and how fast they push, and where a ramp jump fits, how far it goes and the arc over the gap.
 - `js/ride.js`: runs the ride, both cameras, and the events along the track.
 - `js/scenery.js`: the 3D world (painted track, tunnels, pond, stars, trees).
 - `js/slide-world.js`: the water slide's 3D pieces (trough, tubes, bowls, tower, pool, caves, ducks); `js/tropical.js` the island around it.

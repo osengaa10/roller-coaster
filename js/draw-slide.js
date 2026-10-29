@@ -5,6 +5,7 @@
 import { cssColor, stationFor } from './track.js';
 import { sprite, hash, shade, uprightNormals, supportSpots2D, paintClouds, paintBirds, paintSunRays, paintSunDisc } from './draw-art.js';
 import { smoothLine, strokeByColor, roundRect } from './draw-park.js';
+import { springPoints } from './corkscrew.js';
 
 const SUPPORT_TOP = 7.5; // normalized, same as the coaster: no poles drawn above this
 const CLOUDS = [[0.12, 0.2, 1.1, 1], [0.74, 0.26, 1.4, 0], [0.3, 0.42, 0.75, 2], [0.55, 0.08, 0.6, 2]];
@@ -405,7 +406,7 @@ export function paintLive(pad, t, z, space, { sway = true } = {}) {
 // the live painting needs to make the water run.
 export function paintSlide(pad, path, shape) {
   const { ctx, k, unit } = pad;
-  const { path: cut, bowls, rapids } = shape;
+  const { path: cut, bowls, rapids, corkscrews } = shape;
   const pts = cut.map((p) => pad.toScreen(p));
   const n = pts.length;
   const width = Math.max(6, 18 * k);
@@ -464,12 +465,59 @@ export function paintSlide(pad, path, shape) {
   const rapidsAt = rapids.map((r) => pts.slice(r.i0, r.i1 + 1));
   for (const r of rapidsAt) paintRapids(pad, r);
   for (const [j, b] of bowls.entries()) paintBowl(pad, b, cssColor(path[b.i1].c, 0), bowlAt[j]);
+  for (const c of corkscrews) paintTwistyTube(pad, path, c, width);
 
-  // Where the water can be seen running: not under bowls or through rapids.
+  // Where the water can be seen running: not under bowls, through rapids or in a twisty tube.
   const hidden = new Uint8Array(n);
   for (const r of rapids) hidden.fill(1, r.i0, r.i1 + 1);
+  for (let i = 1; i < n; i++) if (cut[i].twist) hidden.fill(1, i - 1, i + 1);
   for (let i = 0; i < n; i++) if (inBowl(pts[i])) hidden[i] = 1;
   return { pts, hidden, width, rapids: rapidsAt, bowls: bowlAt };
+}
+
+// A twisty corkscrew tube where he drew a row of curls: the curls tidied into a neat spring,
+// a see-through tube in his crayon color with bright hoops round it and water swirling inside.
+function paintTwistyTube(pad, path, c, width) {
+  const { ctx, k } = pad;
+  const pts = [path[c.i0], ...springPoints(path[c.i0], path[c.i1], c), path[c.i1]].map((p) => pad.toScreen(p));
+  const color = cssColor(path[c.i1].c, 0);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  smoothLine(ctx, pts);
+  ctx.strokeStyle = 'rgba(20,40,80,0.35)';
+  ctx.lineWidth = width + Math.max(2, 4 * k);
+  ctx.stroke();
+  smoothLine(ctx, pts);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+  smoothLine(ctx, pts);
+  ctx.strokeStyle = 'rgba(191,233,255,0.9)';
+  ctx.lineWidth = Math.max(2, width * 0.34);
+  ctx.stroke();
+  // The clear tube round it, with a shine.
+  smoothLine(ctx, pts);
+  ctx.strokeStyle = 'rgba(220,245,255,0.35)';
+  ctx.lineWidth = width * 1.5;
+  ctx.stroke();
+  smoothLine(ctx, pts.map((p) => ({ x: p.x, y: p.y - width * 0.45 })));
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = Math.max(1, width * 0.12);
+  ctx.stroke();
+  // Hoops every so often.
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = Math.max(1, width * 0.14);
+  for (let i = 4; i < pts.length - 2; i += Math.max(3, Math.round(pts.length / (c.turns * 8)))) {
+    const a = pts[i - 1];
+    const b = pts[i + 1];
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const nx = (-(b.y - a.y) / l) * width * 0.75;
+    const ny = ((b.x - a.x) / l) * width * 0.75;
+    ctx.beginPath();
+    ctx.moveTo(pts[i].x - nx, pts[i].y - ny);
+    ctx.lineTo(pts[i].x + nx, pts[i].y + ny);
+    ctx.stroke();
+  }
 }
 
 // White columns on footings, each with a Y-bracket cradling the trough.

@@ -226,6 +226,13 @@
       <button id="go" class="btn green big" aria-label="Ride it">
         <svg viewBox="0 0 48 48"><path class="fill" d="M15 8v32l26-16z" /></svg>
       </button>
+
+      <!-- Stickers to drag onto the track: a rocket launch and a ramp to jump off. -->
+      <div id="stickers">
+        <button class="sticker" data-st="rocket" aria-label="Rocket sticker"><span class="emoji">🚀</span></button>
+        <button class="sticker" data-st="jump" aria-label="Jump sticker"><svg viewBox="0 0 48 48"><path d="M10 13q9-11 22-4" fill="none" stroke="#ff4d6d" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="0.5 6.5" /><path d="M32 6l2.5 3.5-4 1" fill="none" stroke="#ff4d6d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /><path d="M4 41h40V19z" fill="#ffd23f" stroke="#3d3d45" stroke-width="3" stroke-linejoin="round" /><path d="M17 41l7-10.5M28 41l9-13.5" stroke="#3d3d45" stroke-width="4" /></svg></button>
+      </div>
+      <div id="ghost" aria-hidden="true"></div>
     </section>
 
     <section id="ride" class="screen">
