@@ -455,7 +455,9 @@ export class DrawPad {
     this.drag.at = this.nearestPoint(x, y);
     if (!this.ghost) return;
     const size = this.ghost.offsetWidth || 80;
-    this.ghost.style.transform = `translate(${x - size / 2}px, ${y - size * 1.15}px)`;
+    // The `translate` property, not `transform`: CSS applies `transform` before the `scale` that
+    // `.near` grows it with, which scaled the offset too and pushed it out from under his finger.
+    this.ghost.style.translate = `${x - size / 2}px ${y - size * 1.15}px`;
     this.ghost.classList.toggle('near', !!this.drag.at);
   }
 
