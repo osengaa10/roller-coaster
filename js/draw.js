@@ -473,6 +473,7 @@ export class DrawPad {
     this.strokes = [];
     this.found = null;
     this.setView(1, 0);
+    this.dirty = true;
     this.onChange();
     return true;
   }
