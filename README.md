@@ -10,7 +10,7 @@ The app opens on two big pictures: tap the **coaster** or the **water slide**. E
 2. Tap the big green **▶** button.
 3. **Ride it** in first person with an animal friend (a different one each time), then ride again or draw a new one.
 
-**Hold the line against the top edge** and the view zooms out while the track keeps climbing; keep going and the sky turns into outer space (stars, the moon, planets, the curve of the Earth). Coming back down, the view zooms back in so loops and hills near the ground are normal size. **Hold it against the right or left side** and the drawing scrolls along that way (left stops once the station is back in view). With fingers lifted, slide two fingers to scroll.
+**Take the line up toward the top edge** and the view zooms out (gently at first, faster the closer the finger gets, stopping when it turns back down) while the track keeps climbing; keep going and the sky turns into outer space (stars, the moon, planets, the curve of the Earth). Coming back down, the view zooms back in so loops and hills near the ground are normal size. **Take it toward the right or left side** and the drawing scrolls along that way, the same way (left stops once the station is back in view). With fingers lifted, slide two fingers to scroll.
 
 Things that happen on their own during the ride:
 - **Stars** float along the track. Fly through them to collect them, then count them at the end.

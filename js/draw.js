@@ -20,6 +20,9 @@ const EARTH_R = 220; // normalized; a pretend-small Earth so its curve shows whe
 const REF_UNIT = 700; // px per unit on an iPad; decorations scale relative to this
 const EDGE_ZOOM = 0.55; // per second at first; speeds up the longer he holds against the top
 const EDGE_SCROLL = 0.5; // screen-widths per second when holding against the left or right side
+const EDGE_ZONE = 0.12; // the edge zones reach this far in (fraction of the screen's short side)
+const EDGE_EASE = 10; // per second: how quickly the view's edge motion speeds up and slows down
+const TURN_BACK = 6; // px moved away from an edge in the last tenth of a second: he's turned back
 const PINCH_BEFORE = 15; // a second finger only starts a pinch while the line is shorter than this
 const IDLE_FRAME = 30; // ms between frames while the scenery just sways (about 30 fps)
 const SUPPORTS_EVERY = 100; // ms: while a line is drawn, its columns catch up this often
@@ -72,6 +75,8 @@ export class DrawPad {
     this.zoom = 1;
     this.panX = 0; // track x at the left edge of the screen
     this.edgeHold = 0; // seconds the finger has been held against the top
+    this.edgePush = { top: 0, side: 0 }; // how hard the view is moving at the edges right now (0..1)
+    this.trail = []; // where the drawing finger has been lately: { x, y, t }
     this.zoomedOut = false; // this line zoomed the view out (so it may zoom back in as it comes down)
     this.dirty = true;
     this.active = true;
@@ -290,6 +295,7 @@ export class DrawPad {
     const p = this.toTrack(e.clientX, e.clientY);
     this.strokes.push({ c: this.color, p: [p] });
     this.lastScreen = { x: e.clientX, y: e.clientY };
+    this.trail = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
     this.zoomedOut = false;
     sound.drawStart(p.y, this.mode === 'slide');
     this.trackDirty = true;
@@ -302,13 +308,16 @@ export class DrawPad {
     e.preventDefault();
     const stroke = this.strokes[this.strokes.length - 1].p;
     const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    const now = performance.now();
     for (const ev of events.length ? events : [e]) {
+      this.trail.push({ x: ev.clientX, y: ev.clientY, t: now });
       // Tiny wiggles are skipped, except at an edge, so the view moves the moment he gets there.
       const near = Math.hypot(ev.clientX - this.lastScreen.x, ev.clientY - this.lastScreen.y) < 4;
       if (near && !this.atEdge(ev.clientX, ev.clientY)) continue;
       this.lastScreen = { x: ev.clientX, y: ev.clientY };
       stroke.push(this.toTrack(ev.clientX, ev.clientY));
     }
+    while (this.trail.length > 2 && now - this.trail[0].t > 200) this.trail.shift();
     sound.drawMove(stroke[stroke.length - 1].y);
     this.trackDirty = true;
   }
@@ -328,41 +337,63 @@ export class DrawPad {
     this.onChange();
   }
 
-  // Only the very edge of the screen moves the view (about 16 px on an iPad), so drawing close
-  // to an edge, or doubling back near one, doesn't.
-  get edgeBand() {
-    return Math.max(10, Math.min(this.w, this.h) * 0.02);
+  // The view starts moving well before the finger reaches an edge: gently as it comes into the
+  // zone, full speed in the last quarter by the edge (about 90 px in on an iPad), so the line
+  // flows on without stopping. Drawing close to an edge only nudges it, and turning back stops it.
+  get edgeZone() {
+    return Math.max(40, Math.min(this.w, this.h) * EDGE_ZONE);
   }
 
-  atTop() {
-    return this.lastScreen.y <= this.edgeBand;
+  // How far into an edge zone a spot `d` px from the edge is: 0 outside, easing up to 1.
+  edgeDepth(d) {
+    const zone = this.edgeZone;
+    const s = Math.max(0, Math.min(1, (zone - d) / (zone * 0.75)));
+    return s * s * (3 - 2 * s);
   }
 
+  // Right by an edge, where the view moves at full speed.
   atEdge(x, y) {
-    const band = this.edgeBand;
-    return y <= band || x >= this.w - band || x <= this.left + band;
+    const zone = this.edgeZone * 0.25;
+    return y <= zone || x >= this.w - zone || x <= this.left + zone;
   }
 
-  // Holding a line against an edge keeps the track going that way:
+  // Which way the finger has been going over the last tenth of a second (px; zero once it stops).
+  heading() {
+    const now = performance.now();
+    const recent = this.trail.filter((p) => now - p.t < 100);
+    if (recent.length < 2) return { dx: 0, dy: 0 };
+    const a = recent[0];
+    const b = recent[recent.length - 1];
+    return { dx: b.x - a.x, dy: b.y - a.y };
+  }
+
+  // Taking a line toward an edge keeps the track going that way:
   // the top zooms out (up toward space), the sides scroll along at the same size
   // (the left side only until the station is back in view).
   // The finger stays put while the world moves under it, so the track grows that way.
   edgeMove(dt) {
-    if (this.pointerId === null || !this.lastScreen) return;
-    const { x, y } = this.lastScreen;
-    const top = this.atTop();
-    const right = x >= this.w - this.edgeBand;
-    const left = x <= this.left + this.edgeBand && this.panX > 0;
-    if (!top) this.edgeHold = 0;
-    if (!top && !right && !left) return;
-    let zoom = this.zoom;
-    if (top && zoom > MIN_ZOOM) {
-      this.edgeHold += dt;
-      this.zoomedOut = true;
-      zoom *= Math.exp(-EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45) * dt);
+    const push = this.edgePush;
+    if (this.pointerId === null || !this.lastScreen) {
+      push.top = push.side = 0;
+      return;
     }
-    const side = right ? 1 : left ? -1 : 0;
-    const scroll = (side * EDGE_SCROLL * (this.w - this.left) * dt) / (this.groundY * zoom);
+    const { x, y } = this.lastScreen;
+    const { dx, dy } = this.heading();
+    const top = dy > TURN_BACK ? 0 : this.edgeDepth(y);
+    const right = dx < -TURN_BACK ? 0 : this.edgeDepth(this.w - x);
+    const left = dx > TURN_BACK || this.panX <= 0 ? 0 : this.edgeDepth(x - this.left);
+    const ease = 1 - Math.exp(-EDGE_EASE * dt);
+    push.top += (top - push.top) * ease;
+    push.side += (right - left - push.side) * ease;
+    if (push.top < 0.01) this.edgeHold = 0;
+    if (push.top < 0.002 && Math.abs(push.side) < 0.002) return;
+    let zoom = this.zoom;
+    if (push.top >= 0.002 && zoom > MIN_ZOOM) {
+      this.edgeHold += dt * push.top;
+      this.zoomedOut = true;
+      zoom *= Math.exp(-EDGE_ZOOM * (1 + Math.min(this.edgeHold, 4) * 0.45) * push.top * dt);
+    }
+    const scroll = (push.side * EDGE_SCROLL * (this.w - this.left) * dt) / (this.groundY * zoom);
     this.setView(zoom, this.panX + scroll);
     const stroke = this.strokes[this.strokes.length - 1].p;
     const p = this.toTrack(x, y);
@@ -378,7 +409,7 @@ export class DrawPad {
   // he draws next near the ground (a loop, a little hill) comes out normal size. Only after this
   // line zoomed out against the top: otherwise the view stays put under his finger.
   settleZoom(dt) {
-    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.atTop() || !this.zoomedOut) return;
+    if (this.pointerId === null || !this.lastScreen || this.zoom >= 1 || this.edgePush.top >= 0.01 || !this.zoomedOut) return;
     const stroke = this.strokes[this.strokes.length - 1].p;
     const pen = stroke[stroke.length - 1];
     const target = Math.min(1, 0.5 / Math.max(pen.y, 0.01)); // keep the pen around mid-sky
