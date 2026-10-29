@@ -67,7 +67,7 @@ const PLANETS = [
 // In drawing units: [{ from, to, peak }].
 function jumpPreviews(pts) {
   const kick = JUMP.kicker / 40;
-  const far = 20 / 40;
+  const far = 30 / 40; // a jump after a good drop (about 19 m/s)
   const out = [];
   for (let i = 0; i < pts.length; i++) {
     if (pts[i].st !== 'jump') continue;
@@ -80,7 +80,7 @@ function jumpPreviews(pts) {
       to = pts[j];
       if (d >= far) break;
     }
-    if (from && to && d >= JUMP.shortest / 40 + kick) out.push({ from, to, peak: Math.min(0.12, d * 0.2) });
+    if (from && to && d >= JUMP.shortest / 40 + kick) out.push({ from, to, peak: Math.min(JUMP.height[1] / 40, d * JUMP.rise) });
   }
   return out;
 }

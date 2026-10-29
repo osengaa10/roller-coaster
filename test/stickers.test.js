@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTrack, pathFromStrokes, resample, normalizeStroke, supportSpots, starSpots, tunnelRuns, V_MIN, SLIDE_V_MIN } from '../js/track.js';
-import { LAUNCH } from '../js/stickers.js';
+import { LAUNCH, JUMP } from '../js/stickers.js';
 
 const stroke = (f, n = 120) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
 const W = 0.03;
@@ -100,9 +100,12 @@ test('a ramp jump: the track stops, the train flies over the gap in an arc and l
   const j = tr.jumps[0];
   assert.ok(j.takeoff < j.lip && j.lip < j.land);
   const gap = (j.land - j.lip) * tr.step;
-  assert.ok(gap >= 6 && gap <= 25, `gap ${gap} m`);
-  // In the air between the lip and the landing, and only there.
+  assert.ok(gap >= 6 && gap <= JUMP.longest, `gap ${gap} m`);
+  // In the air between the lip and the landing, and only there: long enough to feel it.
   for (let i = 0; i < tr.count; i++) assert.equal(tr.air[i], i > j.lip && i < j.land ? 1 : 0, `air at ${i}`);
+  let airTime = 0;
+  for (let i = j.lip + 1; i < j.land; i++) airTime += tr.step / tr.speed[i];
+  assert.ok(airTime > 1.2, `${airTime.toFixed(2)} s of air`);
   // Up in an arc above where the track would be, and upright all the way.
   const mid = Math.round((j.lip + j.land) / 2);
   assert.ok(tr.pos[mid * 3 + 1] > 0.08 * 40 + 1.2, 'flies up over the gap');
